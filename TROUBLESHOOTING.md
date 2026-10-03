@@ -1,5 +1,9 @@
 # Troubleshooting
 
+For known failure modes (exit143 causes, the workspace-mismatch fix, jobs not appearing, output caps,
+extension load errors, and cross-extension tool confusion with
+`get_subagent_result`/`Agent`/`steer_subagent`).
+
 **"Pi minion failed (exit 143)." with no other detail.**
 143 = 128 + SIGTERM: a killed `claude` process usually self-reports as a
 plain exit code, not a Node-level signal, so this alone doesn't say *why*
