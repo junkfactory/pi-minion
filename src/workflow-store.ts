@@ -9,6 +9,7 @@ import type {
   WorkflowWidgetStatus
 } from "./agent.ui.js";
 import { deriveJobTitle, truncateResultForContext } from "./format.js";
+import { glyph } from "./glyphs.js";
 import type { WorkflowSession } from "./child-session.js";
 import { jobMeta } from "./job-store.js";
 import { formatNextRun } from "./schedule-store.js";
@@ -321,7 +322,8 @@ export function workflowStepTitle(workflowTitle: string, stepId: string): string
   return `${workflowTitle} › ${stepId}`;
 }
 
-// Picker rows for a running workflow: its ⛓ row, then each running step's
+// Picker rows for a running workflow: its ⇉ row (⇉ is present in common
+// monospace fonts; ⛓ and ⏱ are not), then each running step's
 // job indented beneath it.
 export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: string; label: string }> {
   return [
@@ -467,7 +469,7 @@ export function resolveOwnedWorkflow(
 export function formatWorkflowLabel(wf: Pick<MinionWorkflow, "title" | "steps">): string {
   const done = wf.steps.filter((step) => step.status === "done").length;
   const running = wf.steps.filter((step) => step.status === "running").map((step) => step.id);
-  return `⛓ ${wf.title} · ${done}/${wf.steps.length} steps${running.length ? ` · ${joinIds(running)}` : ""}`;
+  return `${glyph("⇉ ")}${wf.title} · ${done}/${wf.steps.length} steps${running.length ? ` · ${joinIds(running)}` : ""}`;
 }
 
 // A step's model shows as the CLI-reported id once its job has one (running

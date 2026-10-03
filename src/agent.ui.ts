@@ -48,6 +48,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { TokenCounts } from "./adapters/types.js";
 import { truncate } from "./adapters/util.js";
+import { glyph } from "./glyphs.js";
 
 export type JobStatusUpdate = {
   title: string;
@@ -268,7 +269,7 @@ function formatWorkflowBlock(
   const done = status.steps.filter((step) => step.status === "done").length;
   const elapsedSeconds = Math.floor((Date.now() - status.startedAt) / 1_000);
   const header = [
-    `⛓ ${theme.fg("accent", status.title)}`,
+    `${glyph("⇉ ")}${theme.fg("accent", status.title)}`,
     dim(`stage ${status.stage}/${status.stages}`),
     dim(`${done}/${status.steps.length} done`),
     dim(`${elapsedSeconds}s`)

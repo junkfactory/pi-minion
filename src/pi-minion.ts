@@ -1,6 +1,7 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_PRUNE_AFTER_DAYS, loadConfig, readShortcutConfigSync, resolveShortcut } from "./config.js";
+import { setShowGlyphs } from "./glyphs.js";
 import { setModelRegistry } from "./adapters/pi.js";
 import {
   bindSessionApi,
@@ -42,7 +43,9 @@ export default function (pi: ExtensionAPI) {
   // Must happen synchronously here, not inside the async loadConfig() chain
   // below — see readShortcutConfigSync()'s comment for why an async
   // registration silently never takes effect.
-  pi.registerShortcut(resolveShortcut(readShortcutConfigSync()), {
+  const startupConfig = readShortcutConfigSync();
+  setShowGlyphs(startupConfig.showGlyphs);
+  pi.registerShortcut(resolveShortcut(startupConfig), {
     description: "Browse running pi-minion jobs and open a live detail view.",
     handler: openPiMinionsPicker
   });

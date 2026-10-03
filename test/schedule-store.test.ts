@@ -152,7 +152,7 @@ describe("workflow schedules", () => {
   it("labels with a chain marker and the step count", () => {
     assert.equal(
       formatScheduleLabel(schedule, new Date(2026, 8, 30, 9, 0), undefined, new Date(2026, 8, 30, 8, 0)),
-      "⏱⛓ Nightly review · 3 steps · 0 9 * * 1-5 · next 09:00"
+      "⏱⇉ Nightly review · 3 steps · 0 9 * * 1-5 · next 09:00"
     );
   });
 

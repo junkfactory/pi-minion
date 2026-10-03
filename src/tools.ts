@@ -9,6 +9,7 @@ import { getAdapter, listAdapterNames } from "./adapters/registry.js";
 import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig } from "./config.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
+import { glyph } from "./glyphs.js";
 import { deriveJobTitle, distinctModels } from "./format.js";
 import { startJob, validateRequest } from "./job-runner.js";
 import {
@@ -201,7 +202,7 @@ function workflowStepDeps(notify: (message: string) => void, ui: () => ReturnTyp
       startWorkflowSession({
         parentSessionFile: wf.sessionFile,
         cwd: wf.cwd,
-        name: `⛓ ${wf.title}`,
+        name: `${glyph("⇉ ")}${wf.title}`,
         plan: formatWorkflowPlan(wf),
         startedAt: wf.startedAt
       })

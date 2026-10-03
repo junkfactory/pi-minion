@@ -9,6 +9,7 @@ export type MinionConfig = {
   maxOutputBytes?: number;
   maxResultPreviewBytes?: number;
   shortcut?: string;
+  showGlyphs?: boolean;
 };
 
 export type MinionRequest = {

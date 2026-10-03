@@ -18,5 +18,6 @@
   "pruneAfterDays": 3,
   "maxOutputBytes": 15000000,
   "maxResultPreviewBytes": 50000,
-  "shortcut": "alt+j"
+  "shortcut": "alt+j",
+  "showGlyphs": true
 }

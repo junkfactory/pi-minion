@@ -127,7 +127,7 @@ run `run_pi_minion_workflow` on a cron schedule.
   — its summary posts with a "Schedule stopped" note and starts a turn
   (logged `status=unscheduled`, `self_stop`).
 - `list_pi_minion_schedules` shows `kind` and `lastWorkflowId`, the picker
-  marks these rows `⏱⛓`, and `cancel_pi_minion_schedule` stops future ticks.
+  marks scheduled-workflow rows `⏱⇉`, and `cancel_pi_minion_schedule` stops future ticks.
   A session without a UI refuses.
 
 ### In the UI
@@ -138,13 +138,13 @@ runs started by a schedule), then a scrollable detail modal with the job's
 full streamed output. This session's schedules are listed after them as
 `⏱ <title> · <model> / <effort> · <cron> · next <time>`; picking one asks to
 stop it. Running workflows are listed first as
-`⛓ <title> · <done>/<total> steps · <running step ids>`; picking one asks to
+`⇉ <title> · <done>/<total> steps · <running step ids>`; picking one asks to
 cancel it.
 
 **Live status widget** — while jobs are in flight, an `aboveEditor` tree view
 lists them with a spinner, elapsed time, and the latest streamed line, under
 a `π minions · N jobs · N workflows` root row. A running workflow shows as a
-`⛓` row (stage, steps done, elapsed) with its steps nested under it: `○`
+`⇉` row (stage, steps done, elapsed) with its steps nested under it: `○`
 pending, `✓` done, `✗` failed, `–` skipped/cancelled, plus the running step's
 live row. Self-heals across `/reload`, `/new`, fork, and `switchSession` — a
 job that outlives one of those keeps rendering instead of going permanently
@@ -162,7 +162,7 @@ events. Rolls over to `pi-minion.log.1` once it would exceed 15MB.
 assistant messages), threaded under the calling session in `/resume`. A
 calling session with no file (in-memory) writes instead to
 `~/.pi/agent/sessions/pi-minion/<YYYY-MM>/`, which `/resume` doesn't list. A
-workflow gets its own `⛓ <title>` session under the calling session — its
+workflow gets its own `⇉ <title>` session under the calling session — its
 plan when it starts, its summary when it finishes, at zero usage so `/usage`
 counts each step once — with its steps' sessions, named `<model>: <step id>`,
 threaded under it. Either way,
@@ -222,17 +222,18 @@ You can then prompt pi like
 
 [`pi-minion.json`](./pi-minion.json), at the package root:
 
-| Field                   | Required     | Meaning                                                                                                                                                       |
-|-------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                             |
-| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. |
-| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                               |
-| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                              |
-| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                    |
-| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                        |
-| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                          |
-| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.         |
-| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                        |
+| Field                   | Required     | Meaning                                                                                                                                                                                                                         |
+|-------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                                                                                               |
+| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed.                                                                   |
+| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                 |
+| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                                                                                                |
+| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                                                                                      |
+| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                                                                                          |
+| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                                                                                            |
+| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.                                                                           |
+| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                                                                                          |
+| `showGlyphs`            | no (`true`)  | Decorative glyphs (⇉ marks workflows, ⏱ schedules) in the widget and picker. pi-tui counts them as 1 cell, but a font fallback for a codepoint the terminal's font lacks can render wider/misplaced — set `false` to drop them. |
 
 An optional user override at `~/.pi/agent/extensions/pi-minion.json` is
 shallow-merged over the built-in file above — present keys win (array

@@ -340,7 +340,7 @@ describe("workflow status helpers", () => {
   });
 
   it("formats the picker label with progress and running step ids", () => {
-    assert.equal(formatWorkflowLabel(fakeWorkflow()), "⛓ Review MR · 1/2 steps · verify");
+    assert.equal(formatWorkflowLabel(fakeWorkflow()), "⇉ Review MR · 1/2 steps · verify");
   });
 
   it("builds the widget status with current stage and resolved effort", () => {

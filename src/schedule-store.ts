@@ -1,6 +1,7 @@
 import type { Cron } from "croner";
 import type { MinionRequest } from "./adapters/types.js";
 import { distinctModels } from "./format.js";
+import { glyph } from "./glyphs.js";
 import type { JobMetaEntry } from "./job-types.js";
 import type { WorkflowDef } from "./workflow-store.js";
 
@@ -124,10 +125,10 @@ export function formatScheduleLabel(
   now: Date = new Date()
 ): string {
   if (schedule.kind === "workflow") {
-    return `⏱⛓ ${schedule.title} · ${schedule.def.steps.length} steps · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
+    return `${glyph("⏱⇉ ")}${schedule.title} · ${schedule.def.steps.length} steps · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
   }
   const model = resolvedModel ?? schedule.request.model;
-  return `⏱ ${schedule.title} · ${model} / ${schedule.effort} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
+  return `${glyph("⏱ ")}${schedule.title} · ${model} / ${schedule.effort} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
 }
 
 // Lets a scheduled minion end its own schedule ("monitor X until Y"): the

@@ -159,7 +159,7 @@ describe("workflow widget", () => {
 
     // The claimed step job isn't counted as a standalone job.
     assert.match(root!, /^π minions · 1 job · 1 workflow$/);
-    assert.match(lines[0]!, /^├─ ⛓ Review MR · stage 2\/2 · 1\/5 done · 3s/);
+    assert.match(lines[0]!, /^├─ ⇉ Review MR · stage 2\/2 · 1\/5 done · 3s/);
     assert.match(lines[1]!, /^│ {2}├─ ✓ bugs \(sonnet\/medium\)/);
     assert.match(lines[2]!, /✗ perf/);
     assert.match(lines[3]!, /^│ {2}├─ \S+ verify \(luna\/low\).* · Reading auth\.ts/);

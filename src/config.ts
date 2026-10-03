@@ -92,13 +92,14 @@ export function resolveShortcut(config: Pick<MinionConfig, "shortcut">): KeyId {
 // after the extension factory returns (before any later microtask/IO
 // continuation runs) — a pi.registerShortcut() call made from inside an
 // awaited loadConfig().then(...) loses that race and is silently never
-// picked up, with no error surfaced anywhere. Reading just the shortcut
-// field synchronously lets the factory register it before that snapshot is
-// taken; everything else config-dependent can still use the async loadConfig().
+// picked up, with no error surfaced anywhere. Reading just the shortcut and
+// showGlyphs fields synchronously lets the factory register the shortcut and
+// set the glyph flag before that snapshot is taken; everything else
+// config-dependent can still use the async loadConfig().
 export function readShortcutConfigSync(
   overridePath: string = USER_CONFIG_PATH
-): Pick<MinionConfig, "shortcut"> {
-  let base: Pick<MinionConfig, "shortcut">;
+): Pick<MinionConfig, "shortcut" | "showGlyphs"> {
+  let base: Pick<MinionConfig, "shortcut" | "showGlyphs">;
   try {
     base = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Pick<MinionConfig, "shortcut">;
   } catch {
