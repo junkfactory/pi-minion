@@ -3,6 +3,74 @@
 A [Pi](https://pi.dev) extension that delegates tasks to a background `claude -p` minion process,
 so the primary session isn't blocked while the minion works.
 
+## Requirements
+
+- [Pi](https://pi.dev) (developed and tested against pi 1.0.1)
+- The `claude` CLI on your `PATH`, logged in (jobs run as `claude -p` headless sessions)
+
+## Installation
+
+### Install as a pi package (recommended)
+
+```bash
+pi install git:github.com/junkfactory/pi-minion
+```
+
+Pi clones the repo, installs its runtime dependencies (`croner`), and loads
+`src/pi-minion.ts` directly — there is no build step. Manage the install with
+`pi list` / `pi remove`; pin a tag with
+`pi install git:github.com/junkfactory/pi-minion@v0.1.0` if you prefer.
+
+### Install from a local clone (development)
+
+```bash
+git clone https://github.com/junkfactory/pi-minion.git
+cd pi-minion && npm install
+pi install ./pi-minion
+```
+
+Local packages are not touched by pi, so the `npm install` step matters
+(`croner` is a real runtime dependency). For a one-off session without a
+persistent install, load the source directly:
+
+```bash
+pi -e ./src/pi-minion.ts
+```
+
+Restart pi (or run `/reload`) after any install method.
+
+## Using pi-minion
+
+You can then prompt pi like
+
+- Run a pi minion to explore this code base and summarize it
+- Run a sonnet pi minion to debug this ticket
+- Run an opus pi minion to review current changes at medium effort; budget $5
+- Use a workflow: two sonnet agents review the current changes for bugs and performance, then a luna agent verifies their findings
+
+## Configuration
+
+[`pi-minion.json`](./pi-minion.json), at the package root:
+
+| Field                   | Required     | Meaning                                                                                                                                                       |
+|-------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                             |
+| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. |
+| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                               |
+| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                              |
+| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                    |
+| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                        |
+| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                          |
+| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.         |
+| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                        |
+
+An optional user override at `~/.pi/agent/extensions/pi-minion.json` is
+shallow-merged over the built-in file above — present keys win (array
+fields like `allowedModels` are replaced wholesale, not concatenated),
+absent keys fall through to the built-in value. A malformed or non-object
+override is ignored (with a `console.error` warning) rather than failing
+the extension.
+
 ## Tools & features
 
 ### Delegate a task
@@ -145,74 +213,6 @@ threaded under it. Either way,
 real model id. Sessions are never pruned: job pruning only removes
 `~/.pi/agent/pi-minion/<job id>/`.
 
-## Requirements
-
-- [Pi](https://pi.dev) (developed and tested against pi 1.0.1)
-- The `claude` CLI on your `PATH`, logged in (jobs run as `claude -p` headless sessions)
-
-## Installation
-
-### Install as a pi package (recommended)
-
-```bash
-pi install git:github.com/junkfactory/pi-minion
-```
-
-Pi clones the repo, installs its runtime dependencies (`croner`), and loads
-`src/pi-minion.ts` directly — there is no build step. Manage the install with
-`pi list` / `pi remove`; pin a tag with
-`pi install git:github.com/junkfactory/pi-minion@v0.1.0` if you prefer.
-
-### Install from a local clone (development)
-
-```bash
-git clone https://github.com/junkfactory/pi-minion.git
-cd pi-minion && npm install
-pi install ./pi-minion
-```
-
-Local packages are not touched by pi, so the `npm install` step matters
-(`croner` is a real runtime dependency). For a one-off session without a
-persistent install, load the source directly:
-
-```bash
-pi -e ./src/pi-minion.ts
-```
-
-Restart pi (or run `/reload`) after any install method.
-
-## Using pi-minion
-
-You can then prompt pi like
-
-- Run a pi minion to explore this code base and summarize it
-- Run a sonnet pi minion to debug this ticket
-- Run an opus pi minion to review current changes at medium effort; budget $5
-- Use a workflow: two sonnet agents review the current changes for bugs and performance, then a luna agent verifies their findings
-
-## Configuration
-
-[`pi-minion.json`](./pi-minion.json), at the package root:
-
-| Field                   | Required     | Meaning                                                                                                                                                       |
-|-------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                             |
-| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. |
-| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                               |
-| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                              |
-| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                    |
-| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                        |
-| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                          |
-| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.         |
-| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                        |
-
-An optional user override at `~/.pi/agent/extensions/pi-minion.json` is
-shallow-merged over the built-in file above — present keys win (array
-fields like `allowedModels` are replaced wholesale, not concatenated),
-absent keys fall through to the built-in value. A malformed or non-object
-override is ignored (with a `console.error` warning) rather than failing
-the extension.
-
 ## Development
 
 ```bash
@@ -257,10 +257,3 @@ compiled artifact).
   matches the job's own resolved thinking level (not the main session's).
 - A modal left open when its job finishes shows a `finished` marker and
   stays open/scrollable — it does not auto-close.
-
-## Design history
-
-Design rationale, rejected alternatives, and a running log of post-ship
-fixes live in `jj`/git history on this file's predecessor — search commit
-messages for the relevant symptom (e.g. "session_shutdown", "workspace",
-"thinking level") rather than a separate living design doc.
