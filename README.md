@@ -1,16 +1,68 @@
 # pi-minion
 
-A [Pi](https://pi.dev) extension that delegates tasks to a background `claude -p` minion process,
+A [Pi](https://pi.dev) extension that delegates tasks to a background minion
+process — `claude`, `agy`, or `pi`, whichever CLI owns the requested model —
 so the primary session isn't blocked while the minion works.
+
+## Architecture
+
+One extension process, everything in-session; only the minion CLIs run
+outside it.
+
+```mermaid
+flowchart TB
+    subgraph session["pi session (pi-minion extension loaded)"]
+        direction TB
+        tools["Agent tools<br/>run_pi_minion · run_pi_minion_workflow<br/>schedule_pi_minion / schedule_pi_minion_workflow · list/cancel …"]
+        cron["croner cron ticks"]
+        workflow["workflow-runner<br/>max 10 steps, 4 concurrent"]
+        stores["In-memory stores<br/>jobs · schedules · workflows"]
+        runner["job-runner"]
+        adapters["Adapter registry<br/>claude · agy · pi"]
+        ui["UI<br/>live status widget · /pi-minions picker + modal (alt+j)"]
+        transcript["Transcript<br/>result via sendMessage + collapsible pi-minion-display entry"]
+    end
+
+    minion["Detached headless CLI<br/>claude / agy / pi — whichever owns the model"]
+    disk[("Disk<br/>~/.pi/agent/pi-minion/<job id>/<br/>pi-minion.log · sub-sessions")]
+
+    tools -->|start| runner
+    tools -->|confirm, then run| workflow
+    tools -->|arm| cron
+    cron -->|tick| runner
+    cron -->|tick| workflow
+    workflow -->|one job per step| runner
+    runner -->|resolve model| adapters
+    adapters -->|spawn| minion
+    minion -->|streamed stdout lines| runner
+    runner -->|result + per-model usage| transcript
+    runner -->|state| stores
+    workflow -->|state| stores
+    cron -->|state| stores
+    stores -->|render| ui
+    runner -->|"job dir, log, sub-session"| disk
+```
+
+- The minion is a detached child process: `run_pi_minion` returns a job ID
+  immediately, and the CLI's streamed output is captured and parsed while the
+  primary session keeps working.
+- Nothing polls: when the job exits, its result is pushed into the transcript
+  (`sendMessage` + `pi-minion-display` entry); the adapter that owns the
+  model parses its own CLI's wire format into normalized result/usage events.
+- Everything else — jobs, schedules, workflows, the widget, the picker —
+  lives inside the pi session and dies with it; only the disk artifacts
+  (job dirs, log, sub-sessions) outlive the session.
 
 ## Requirements
 
 - [Pi](https://pi.dev) (developed and tested against pi 1.0.1)
-- The `claude` CLI on your `PATH`, logged in (jobs run as `claude -p` headless sessions)
+- At least one agent CLI on your `PATH` and logged in — `claude`, `agy`, or
+  `pi` — for the models you want to delegate to (jobs run as headless CLI
+  sessions).
 
 ## Installation
 
-### Install as a pi package (recommended)
+### As a pi package (recommended)
 
 ```bash
 pi install git:github.com/junkfactory/pi-minion
@@ -21,7 +73,7 @@ Pi clones the repo, installs its runtime dependencies (`croner`), and loads
 `pi list` / `pi remove`; pin a tag with
 `pi install git:github.com/junkfactory/pi-minion@v0.1.0` if you prefer.
 
-### Install from a local clone (development)
+### From a local clone (development)
 
 ```bash
 git clone https://github.com/junkfactory/pi-minion.git
