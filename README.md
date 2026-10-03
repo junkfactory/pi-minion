@@ -18,12 +18,16 @@ flowchart TB
         workflow["workflow-runner<br/>max 10 steps, 4 concurrent"]
         stores["In-memory stores<br/>jobs · schedules · workflows"]
         runner["job-runner"]
-        adapters["Adapter registry<br/>claude · agy · pi"]
         ui["UI<br/>live status widget · /pi-minions picker + modal (alt+j)"]
         transcript["Transcript<br/>result via sendMessage + collapsible pi-minion-display entry"]
     end
 
-    minion["Detached headless CLI<br/>claude / agy / pi — whichever owns the model"]
+    adapters["Adapter registry<br/>resolves the model to an adapter"]
+
+    claude["claude -p"]
+    agy["agy -p=…"]
+    pi["pi --mode json"]
+
     disk[("Disk<br/>~/.pi/agent/pi-minion/<job id>/<br/>pi-minion.log · sub-sessions")]
 
     tools -->|start| runner
@@ -33,8 +37,12 @@ flowchart TB
     cron -->|tick| workflow
     workflow -->|one job per step| runner
     runner -->|resolve model| adapters
-    adapters -->|spawn| minion
-    minion -->|streamed stdout lines| runner
+    adapters -->|spawn| claude
+    adapters -->|spawn| agy
+    adapters -->|spawn| pi
+    claude -->|streamed stdout lines| runner
+    agy -->|streamed stdout lines| runner
+    pi -->|streamed stdout lines| runner
     runner -->|result + per-model usage| transcript
     runner -->|state| stores
     workflow -->|state| stores
