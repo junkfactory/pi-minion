@@ -1,0 +1,34 @@
+{
+  "defaultModel": "haiku",
+  "defaultEffort": "medium",
+  "allowedModels": [
+    "opus",
+    "sonnet",
+    "haiku",
+    "fable",
+    "gemini-flash",
+    "gemini-pro",
+    "gpt-oss",
+    "luna",
+    "terra",
+    "sol",
+    "astra"
+  ],
+  "allowedTools": [
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Read",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+    "mcp__*"
+  ],
+  "maxBudgetUsd": 5,
+  "timeoutMs": 900000,
+  "pruneAfterDays": 3,
+  "maxOutputBytes": 15000000,
+  "maxResultPreviewBytes": 50000,
+  "shortcut": "alt+j"
+}
