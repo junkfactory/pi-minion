@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { getAdapter, listAdapterNames, resolveAdapterForModel } from "../../src/adapters/registry.js";
+import { setModelRegistry } from "../../src/adapters/pi.js";
+import { fakeModelRegistry } from "../fakes.js";
+
+// ownsModel routes against the captured catalog — seed a fake one for this
+// file (node:test isolates files in their own process, so no cleanup needed).
+setModelRegistry(
+  fakeModelRegistry([
+    { id: "gpt-6-luna", provider: "opencode-go" },
+    { id: "gpt-5.6-terra", provider: "opencode-go" },
+    { id: "gpt-6-sol", provider: "openai-codex" },
+    { id: "gpt-6.1-sol", provider: "openai-codex" }
+  ])
+);
 
 describe("getAdapter / listAdapterNames", () => {
   it("returns the claude adapter by name", () => {

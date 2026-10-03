@@ -37,6 +37,19 @@ describe("validateRequest", () => {
     }
   });
 
+  it("allows any model when allowedModels is empty (allow-all default)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    try {
+      await validateRequest(
+        fakeRequest({ workspace: dir, model: "any-catalog-id" }),
+        dir,
+        fakeConfig({ allowedModels: [] })
+      );
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("rejects a non-positive maxBudgetUsd override", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {

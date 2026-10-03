@@ -1,19 +1,7 @@
 {
   "defaultModel": "haiku",
   "defaultEffort": "medium",
-  "allowedModels": [
-    "opus",
-    "sonnet",
-    "haiku",
-    "fable",
-    "gemini-flash",
-    "gemini-pro",
-    "gpt-oss",
-    "luna",
-    "terra",
-    "sol",
-    "astra"
-  ],
+  "allowedModels": [],
   "allowedTools": [
     "Bash",
     "Edit",

@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { Type, type Static } from "typebox";
 import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
+import { availableModelIds } from "./adapters/pi.js";
 import { commandExists } from "./adapters/util.js";
 import { getAdapter, listAdapterNames } from "./adapters/registry.js";
 import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig } from "./config.js";
@@ -265,12 +266,17 @@ async function confirmWorkflowRequest(
 // A model whose adapter binary isn't on PATH is dropped — recommending a model
 // that would currently fail to spawn isn't useful. Adapters stay internal: the
 // agent only ever sees model names.
+// Empty allowedModels means "allow all": the universe becomes the live
+// catalog ids (availableModelIds()), each filtered through ownership like
+// the allowlisted path.
 export function buildHelpModelList(
   candidates: Array<{ adapter: AgentCliAdapter; present: boolean }>,
-  allowedModels: string[]
+  allowedModels: string[],
+  availableIds: string[] = []
 ): string[] {
   const present = candidates.filter((candidate) => candidate.present);
-  return allowedModels.filter((model) => present.some(({ adapter }) => adapter.ownsModel(model)));
+  const universe = allowedModels.length ? allowedModels : availableIds;
+  return universe.filter((model) => present.some(({ adapter }) => adapter.ownsModel(model)));
 }
 
 function textResult<T>(text: string, details: T) {
@@ -704,7 +710,7 @@ export function registerTools(pi: ExtensionAPI): void {
         })
       );
       const payload = {
-        models: buildHelpModelList(candidates, config.allowedModels),
+        models: buildHelpModelList(candidates, config.allowedModels, availableModelIds()),
         examples: PI_MINION_EXAMPLES,
         usageNotes: PI_MINION_USAGE_NOTES
       };

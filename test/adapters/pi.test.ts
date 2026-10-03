@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import {
   buildArgs,
   describeUnsupported,
   environment,
   ownsModel,
-  parseLine
+  parseLine,
+  setModelRegistry
 } from "../../src/adapters/pi.js";
+import { fakeModelRegistry } from "../fakes.js";
 import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
@@ -36,22 +38,50 @@ function flagValue(args: string[], flag: string): string | undefined {
 }
 
 describe("ownsModel", () => {
-  it("recognizes gpt-<digit> ids and any provider/id model", () => {
+  beforeEach(() => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-5.6-luna", provider: "opencode-go" },
+        { id: "gpt-6.1-sol", provider: "openai-codex" },
+        { id: "claude-sonnet-5-5", provider: "anthropic" }
+      ])
+    );
+  });
+
+  afterEach(() => {
+    setModelRegistry(undefined);
+  });
+
+  it("claims bare ids that exist in the available catalog", () => {
     assert.equal(ownsModel("gpt-6-luna"), true);
-    assert.equal(ownsModel("gpt-5.6-terra"), true);
-    assert.equal(ownsModel("openai-codex/gpt-6-sol"), true);
-    assert.equal(ownsModel("amazon-bedrock/global.anthropic.claude-opus-5-5"), true);
+    assert.equal(ownsModel("GPT-6-LUNA"), true);
   });
 
-  it("recognizes the short aliases", () => {
-    for (const alias of ["luna", "terra", "sol", "astra"]) assert.equal(ownsModel(alias), true);
+  it("claims provider/id references that exist in the catalog", () => {
+    assert.equal(ownsModel("openai-codex/gpt-6.1-sol"), true);
+    assert.equal(ownsModel("amazon-bedrock/global.anthropic.claude-opus-5-5"), false);
   });
 
-  it("does not claim agy's gpt-oss or claude/gemini aliases", () => {
+  it("claims short aliases a catalog id ends with (pi fuzzy-matches at spawn)", () => {
+    assert.equal(ownsModel("luna"), true);
+    assert.equal(ownsModel("sol"), true);
+    assert.equal(ownsModel("terra"), false);
+    assert.equal(ownsModel("astra"), false);
+  });
+
+  it("claims nothing without a captured registry", () => {
+    setModelRegistry(undefined);
+    assert.equal(ownsModel("gpt-6-luna"), false);
+    assert.equal(ownsModel("luna"), false);
+    assert.equal(ownsModel("openai-codex/gpt-6.1-sol"), false);
+  });
+
+  it("claude/gemini ids stay with the claude and agy adapters by check order", () => {
+    assert.equal(ownsModel("claude-sonnet-5-5"), true);
     assert.equal(ownsModel("gpt-oss"), false);
     assert.equal(ownsModel("gpt-oss-120b"), false);
     assert.equal(ownsModel("haiku"), false);
-    assert.equal(ownsModel("claude-sonnet-5-5"), false);
     assert.equal(ownsModel("gemini-flash"), false);
   });
 });
@@ -70,11 +100,10 @@ describe("buildArgs", () => {
     assert.equal(flagValue(args, "--thinking"), "low");
   });
 
-  it("resolves a short alias to its full model id", () => {
-    assert.equal(flagValue(buildArgs(fakeRequest({ model: "luna" }), fakeConfig()), "--model"), "gpt-6-luna");
-    assert.equal(flagValue(buildArgs(fakeRequest({ model: "terra" }), fakeConfig()), "--model"), "gpt-5.6-terra");
-    assert.equal(flagValue(buildArgs(fakeRequest({ model: "sol" }), fakeConfig()), "--model"), "gpt-6.1-sol");
-    assert.equal(flagValue(buildArgs(fakeRequest({ model: "astra" }), fakeConfig()), "--model"), "gpt-6-astra");
+  it("passes short aliases through for pi's own pattern matching to resolve", () => {
+    for (const alias of ["luna", "terra", "sol", "astra"]) {
+      assert.equal(flagValue(buildArgs(fakeRequest({ model: alias }), fakeConfig()), "--model"), alias);
+    }
   });
 
   it("falls back to config.defaultEffort when the request omits one", () => {

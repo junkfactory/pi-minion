@@ -1,3 +1,4 @@
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { MinionConfig, MinionRequest } from "../src/adapters/types.js";
 
 export function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
@@ -19,6 +20,15 @@ export function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionReque
     model: "sonnet",
     ...overrides
   };
+}
+
+// Stub for the pi adapter's modelRegistry hook (setModelRegistry): ownsModel
+// routes against these Model-like rows — { id, provider } is all its matcher
+// reads.
+export function fakeModelRegistry(
+  models: Array<{ id: string; provider: string }>
+): ModelRegistry {
+  return { getAvailable: () => models } as unknown as ModelRegistry;
 }
 
 // Minimal stand-ins for Pi's real Theme/TUI/ExtensionContext — only the

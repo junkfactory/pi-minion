@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { setModelRegistry } from "../src/adapters/pi.js";
+import { fakeModelRegistry } from "./fakes.js";
 import {
   formatWorkflowConfirm,
   formatWorkflowLabel,
@@ -31,6 +33,11 @@ import {
 } from "../src/workflow-store.js";
 
 const config = { defaultEffort: "medium", maxBudgetUsd: 5 };
+
+// ownsModel routes against the captured catalog — seed one covering the
+// pi-adapter models these tests reference (files run in isolated test
+// processes, so no cleanup needed).
+setModelRegistry(fakeModelRegistry([{ id: "gpt-5", provider: "openai-codex" }]));
 
 function def(...steps: Array<Partial<WorkflowStepDef> & { id: string }>): WorkflowStepDef[] {
   return steps.map((step) => ({ task: `Task ${step.id}`, model: "sonnet", ...step }));

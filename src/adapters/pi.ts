@@ -8,28 +8,57 @@ import type {
   TokenCounts,
   UsageTotals
 } from "./types.js";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { MINION_PROMPT_BASE, resolveTaskText, sumFields } from "./util.js";
 
-const MODEL_ALIASES: Record<string, string> = {
-  // Latest version per family as of 2026-10 — re-check `pi --list-models`
-  // periodically; same staleness risk as agy.ts's MODEL_ALIASES.
-  luna: "gpt-6-luna",
-  terra: "gpt-5.6-terra",
-  sol: "gpt-6.1-sol",
-  astra: "gpt-6-astra"
-};
+// Captured from the extension ctx by pi-minion.ts's session_start handler
+// (same capture-and-refresh shape as jobUI's setCtx): the parent pi process
+// already loaded the live model catalog + credentials, so routing checks real
+// availability instead of hardcoded claims. The registry (not a snapshot) is
+// held so getAvailable() reflects later credential changes.
+let modelRegistry: ModelRegistry | undefined;
 
-// pi is a multi-provider router: besides the aliases above, "gpt-<digit>"
-// covers its openai-codex models (gpt-6-luna, gpt-5.6-terra, …) without
-// colliding with agy's "gpt-oss", and any explicit "provider/id" (e.g.
-// "openai-codex/gpt-6-sol") is pi's own --model syntax, which no other
-// adapter accepts.
-export function ownsModel(model: string): boolean {
-  return model in MODEL_ALIASES || /^gpt-\d/i.test(model) || model.includes("/");
+export function setModelRegistry(registry: ModelRegistry | undefined): void {
+  modelRegistry = registry;
 }
 
-function resolveModelId(model: string): string {
-  return MODEL_ALIASES[model] ?? model;
+// Deduped bare ids of the available catalog — the universe help_pi_minion
+// lists when allowedModels is empty. Each id is routable by some present
+// adapter (registry check order keeps claude/agy claims ahead of pi's).
+export function availableModelIds(): string[] {
+  return [...new Set((modelRegistry?.getAvailable() ?? []).map((model) => model.id))];
+}
+
+// pi's --model accepts patterns (short alias names like "luna" fuzzy-match
+// and resolve to the latest version — verified: "--model luna" runs
+// gpt-6-luna over gpt-5.6-luna), and any explicit "provider/id" reference is
+// pi's own syntax, which no other adapter accepts. Routing mirrors that with
+// a claim-only check against the available catalog (buildArgs passes the
+// model through, so pi still does the actual version resolution): an exact
+// bare id, a catalogued provider/id, or an alias some available id ends
+// with. claude-*/gemini-*/gpt-oss ids can appear in that catalog too (pi
+// routes those providers itself) — safe because the registry checks the
+// claude and agy adapters before this one. pi's own model matcher isn't
+// publicly exported (only ModelRuntime-bound resolvers are), so this stays a
+// small local approximation: narrower than pi's fuzzy matching, which at
+// worst routes an exotic pattern to a clear "Unknown model" error instead of
+// a spawn-time failure.
+export function ownsModel(model: string): boolean {
+  const available = modelRegistry?.getAvailable();
+  if (!available) return false;
+  const lower = model.toLowerCase();
+  const slash = model.indexOf("/");
+  if (slash !== -1) {
+    return available.some(
+      (candidate) =>
+        candidate.provider.toLowerCase() === lower.slice(0, slash) &&
+        candidate.id.toLowerCase() === lower.slice(slash + 1)
+    );
+  }
+  return (
+    available.some((candidate) => candidate.id.toLowerCase() === lower) ||
+    available.some((candidate) => candidate.id.toLowerCase().endsWith(`-${lower}`))
+  );
 }
 
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
@@ -43,7 +72,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     "--no-session",
     "--no-extensions",
     "--model",
-    resolveModelId(request.model),
+    request.model,
     "--thinking",
     request.effort ?? config.defaultEffort,
     "--append-system-prompt",

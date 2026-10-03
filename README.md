@@ -139,7 +139,7 @@ You can then prompt pi like
 | Field                   | Required     | Meaning                                                                                                                                               |
 |-------------------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                     |
-| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected.                                                                                       |
+| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. |
 | `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                         |
 | `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                        |
 | `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                              |

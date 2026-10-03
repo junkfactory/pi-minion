@@ -21,7 +21,7 @@ describe("loadConfig", () => {
     const config = await loadConfig(join(tmpdir(), "pi-minion-test-no-override.json"));
     assert.equal(config.defaultModel, "haiku");
     assert.equal(config.defaultEffort, "medium");
-    assert.ok(config.allowedModels.includes("sonnet"));
+    assert.deepEqual(config.allowedModels, []);
     assert.equal(config.maxOutputBytes, 15_000_000);
     assert.equal(config.maxResultPreviewBytes, 50_000);
     assert.equal(config.shortcut, "alt+j");

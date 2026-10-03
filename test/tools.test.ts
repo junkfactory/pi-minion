@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
 import { claudeAdapter } from "../src/adapters/claude.js";
 import { agyAdapter } from "../src/adapters/agy.js";
+import { piAdapter, setModelRegistry } from "../src/adapters/pi.js";
+import { fakeModelRegistry } from "./fakes.js";
 import {
   buildHelpModelList,
   PI_MINION_EXAMPLES,
@@ -40,6 +42,30 @@ describe("buildHelpModelList", () => {
 
   it("returns an empty list when no candidate is present", () => {
     assert.deepEqual(buildHelpModelList([{ adapter: claudeAdapter, present: false }], ["sonnet"]), []);
+  });
+
+  it("with an empty allowlist, lists available catalog ids the present adapters own", () => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-6-luna", provider: "other-go" }
+      ])
+    );
+    try {
+      const result = buildHelpModelList(
+        [
+          { adapter: claudeAdapter, present: true },
+          { adapter: piAdapter, present: true }
+        ],
+        [],
+        ["claude-sonnet-5-5", "gpt-6-luna", "totally-unknown"]
+      );
+      // claude-* → claude adapter; gpt-6-luna → pi via the captured catalog;
+      // totally-unknown → nobody owns it, dropped (duplicates deduped).
+      assert.deepEqual(result, ["claude-sonnet-5-5", "gpt-6-luna"]);
+    } finally {
+      setModelRegistry(undefined);
+    }
   });
 });
 

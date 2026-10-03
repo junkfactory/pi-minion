@@ -72,6 +72,18 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   return config;
 }
 
+// Empty allowedModels means "no static allowlist": every model a present
+// adapter can own is allowed (with the pi adapter routing against the live
+// catalog, that's every credential-available model on this machine; unknown
+// ids still fail at startJob with "Unknown model"). A non-empty list is a
+// strict whitelist, checked exactly.
+export function isModelAllowed(
+  config: Pick<MinionConfig, "allowedModels">,
+  model: string
+): boolean {
+  return config.allowedModels.length === 0 || config.allowedModels.includes(model);
+}
+
 export function resolveShortcut(config: Pick<MinionConfig, "shortcut">): KeyId {
   return (config.shortcut ?? DEFAULT_SHORTCUT) as KeyId;
 }

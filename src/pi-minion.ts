@@ -1,6 +1,7 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_PRUNE_AFTER_DAYS, loadConfig, readShortcutConfigSync, resolveShortcut } from "./config.js";
+import { setModelRegistry } from "./adapters/pi.js";
 import {
   bindSessionApi,
   holdPostsFor,
@@ -152,6 +153,10 @@ export default function (pi: ExtensionAPI) {
       replacedSessionId = undefined;
     }
     bindSessionApi(sessionId, pi);
+    // Hands the adapter the parent process's live model registry (same
+    // capture-and-refresh rationale as the jobUI setCtx above): ownsModel
+    // routes against real catalog availability from now on.
+    setModelRegistry(ctx.modelRegistry);
     // Fires on the new, non-stale runner immediately after every session
     // replacement (/reload, /new, fork, switchSession) — and at process
     // startup — with a ctx that's valid even though no tool/command has

@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_RESULT_PREVIEW_BYTES,
   DEFAULT_PRUNE_AFTER_DAYS,
+  isModelAllowed,
   loadConfig
 } from "./config.js";
 import {
@@ -52,7 +53,7 @@ export async function validateRequest(
   }
   if (!(await stat(workspace)).isDirectory())
     throw new Error("workspace is not a directory");
-  if (!config.allowedModels.includes(request.model))
+  if (!isModelAllowed(config, request.model))
     throw new Error(
       `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
     );
