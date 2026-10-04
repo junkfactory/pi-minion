@@ -27,7 +27,7 @@ function resolveModelId(model: string): string {
   return MODEL_ALIASES[model] ?? model;
 }
 
-export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
+export function buildArgs(request: MinionRequest, _config: MinionConfig): string[] {
   // agy has no --append-system-prompt/--system-prompt equivalent (confirmed
   // against `agy --help` — no prompt-related flag beyond --prompt itself, an
   // alias for --print) — the minion prompt is prepended to the task text
@@ -49,7 +49,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     "--model",
     resolveModelId(request.model),
     "--effort",
-    request.effort ?? config.defaultEffort
+    request.effort
   ];
 }
 

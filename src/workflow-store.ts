@@ -22,7 +22,7 @@ export type WorkflowStepDef = {
   // May contain {{steps.<id>.result}}; each referenced id must be in dependsOn.
   task: string;
   model: string;
-  effort?: string;
+  effort: string;
   dependsOn?: string[];
   maxBudgetUsd?: number;
 };
@@ -50,8 +50,7 @@ export type MinionWorkflow = {
   title: string;
   context: string;
   maxBudgetUsd?: number;
-  // pi-minion.json's defaultEffort and maxResultPreviewBytes at creation.
-  defaultEffort: string;
+  // pi-minion.json's maxResultPreviewBytes at creation.
   maxResultPreviewBytes: number;
   cwd: string;
   sessionId: string;
@@ -74,7 +73,7 @@ export const workflows = new Map<string, MinionWorkflow>();
 // tick alike — so one-off and scheduled runs can't drift apart.
 export function newWorkflow(
   def: WorkflowDef,
-  env: Pick<MinionWorkflow, "defaultEffort" | "maxResultPreviewBytes" | "cwd" | "sessionId" | "sessionFile" | "scheduled">
+  env: Pick<MinionWorkflow, "maxResultPreviewBytes" | "cwd" | "sessionId" | "sessionFile" | "scheduled">
 ): MinionWorkflow {
   return {
     title: def.title,
@@ -301,14 +300,14 @@ const CONFIRM_STEP_TITLE_LENGTH = 80;
 
 // The workflow session's opening message in /resume: each step with its
 // model/effort, what it waits for, and its task.
-export function formatWorkflowPlan(wf: Pick<MinionWorkflow, "title" | "context" | "steps" | "defaultEffort">): string {
+export function formatWorkflowPlan(wf: Pick<MinionWorkflow, "title" | "context" | "steps">): string {
   return [
     `Workflow: ${wf.title}`,
     "",
     `Context: ${wf.context}`,
     "",
     ...wf.steps.flatMap((step) => [
-      `## ${step.id} (${step.model}/${step.effort ?? wf.defaultEffort})${step.dependsOn.length ? ` after ${step.dependsOn.join(", ")}` : ""}`,
+      `## ${step.id} (${step.model}/${step.effort})${step.dependsOn.length ? ` after ${step.dependsOn.join(", ")}` : ""}`,
       "",
       step.task,
       ""
@@ -340,7 +339,7 @@ export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: 
 // Stages are display-only groups; each step line names exactly what it waits for.
 export function formatWorkflowConfirm(
   def: WorkflowDef,
-  config: Pick<MinionConfig, "defaultEffort" | "maxBudgetUsd">,
+  config: Pick<MinionConfig, "maxBudgetUsd">,
   // Extra lines for a scheduled workflow; also swaps the closing question.
   scheduleLines?: string[],
   enforces: (model: string) => boolean = modelEnforcesBudget
@@ -361,10 +360,9 @@ export function formatWorkflowConfirm(
     lines.push([{ text: heading, style: "muted" }]);
     for (const id of ids) {
       const step = byId.get(id)!;
-      const effort = step.effort ?? config.defaultEffort;
       const line: ConfirmLine = [
         { text: `  • ${id}: ${deriveJobTitle(step.task, CONFIRM_STEP_TITLE_LENGTH)} — ` },
-        { text: `${step.model}, ${effort} effort`, style: "effort", effort }
+        { text: `${step.model}, ${step.effort} effort`, style: "effort", effort: step.effort }
       ];
       if (!enforces(step.model)) line.push({ text: " · no cost ceiling", style: "muted" });
       const deps = step.dependsOn ?? [];
@@ -494,7 +492,7 @@ export function workflowWidgetStatus(
       id: step.id,
       status: step.status,
       model: (step.jobId && resolvedModel(step.jobId)) || step.model,
-      effort: step.effort ?? wf.defaultEffort,
+      effort: step.effort,
       jobId: step.jobId,
       startedAt: step.startedAt,
       finishedAt: step.finishedAt,

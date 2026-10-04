@@ -32,7 +32,7 @@ import {
   type WorkflowStepDef
 } from "../src/workflow-store.js";
 
-const config = { defaultEffort: "medium", maxBudgetUsd: 5 };
+const config = { maxBudgetUsd: 5 };
 
 // ownsModel routes against the captured catalog — seed one covering the
 // pi-adapter models these tests reference (files run in isolated test
@@ -40,19 +40,20 @@ const config = { defaultEffort: "medium", maxBudgetUsd: 5 };
 setModelRegistry(fakeModelRegistry([{ id: "gpt-5", provider: "openai-codex" }]));
 
 function def(...steps: Array<Partial<WorkflowStepDef> & { id: string }>): WorkflowStepDef[] {
-  return steps.map((step) => ({ task: `Task ${step.id}`, model: "sonnet", ...step }));
+  return steps.map(
+    (step) => ({ task: `Task ${step.id}`, model: "sonnet", effort: "medium", ...step }) as WorkflowStepDef
+  );
 }
 
 function fakeWorkflow(overrides: Partial<MinionWorkflow> = {}): MinionWorkflow {
   return {
     title: "Review MR",
     context: "No prior context.",
-    defaultEffort: "medium",
     maxResultPreviewBytes: 50_000,
     cwd: "/w",
     sessionId: "s1",
     steps: [
-      { id: "bugs", task: "t", model: "sonnet", dependsOn: [], status: "done", reportPath: "/r/bugs.md" },
+      { id: "bugs", task: "t", model: "sonnet", effort: "medium", dependsOn: [], status: "done", reportPath: "/r/bugs.md" },
       { id: "verify", task: "t", model: "luna", effort: "low", dependsOn: ["bugs"], status: "running", jobId: "j2" }
     ],
     startedAt: 0,
@@ -191,7 +192,7 @@ describe("formatWorkflowConfirm", () => {
         title: "Review MR",
         context: "No prior context.",
         steps: def(
-          { id: "bugs", task: "Find bugs in the auth changes" },
+          { id: "bugs", task: "Find bugs in the auth changes", effort: "medium" },
           { id: "perf", task: "Find performance issues", effort: "high", maxBudgetUsd: 2 },
           { id: "verify", task: "Verify each finding: {{steps.bugs.result}}", model: "luna", effort: "low", dependsOn: ["bugs", "perf"] }
         )
@@ -291,8 +292,8 @@ describe("formatWorkflowConfirm step descriptions", () => {
   it("allows ~80 characters per step description", () => {
     const task = "List the three largest files in the repository and report their sizes in bytes please";
     const { lines } = formatWorkflowConfirm(
-      { title: "T", context: "c", steps: [{ id: "a", task, model: "sonnet" }] },
-      { defaultEffort: "medium", maxBudgetUsd: 5 }
+      { title: "T", context: "c", steps: [{ id: "a", task, model: "sonnet", effort: "medium" }] },
+      { maxBudgetUsd: 5 }
     );
     assert.match(plain(lines), /• a: List the three largest files in the repository and report their sizes in bytes/);
     assert.ok(!plain(lines).includes("please"));
@@ -406,8 +407,8 @@ describe("scheduled workflow helpers", () => {
     const now = new Date(2026, 8, 30, 8, 0);
     const scheduleLines = formatWorkflowScheduleLines("0 9 * * 1-5", new Date(2026, 8, 30, 9, 0), 7.5, now);
     const { lines } = formatWorkflowConfirm(
-      { title: "T", context: "c", steps: [{ id: "a", task: "Do a thing", model: "sonnet" }] },
-      { defaultEffort: "medium", maxBudgetUsd: 5 },
+      { title: "T", context: "c", steps: [{ id: "a", task: "Do a thing", model: "sonnet", effort: "medium" }] },
+      { maxBudgetUsd: 5 },
       scheduleLines
     );
     assert.match(plain(lines), /Runs on "0 9 \* \* 1-5" — next run 09:00/);
@@ -447,9 +448,8 @@ describe("formatWorkflowPlan", () => {
     const plan = formatWorkflowPlan({
       title: "Review MR",
       context: "No prior context.",
-      defaultEffort: "medium",
       steps: [
-        { id: "bugs", task: "Find bugs", model: "sonnet", dependsOn: [], status: "pending" },
+        { id: "bugs", task: "Find bugs", model: "sonnet", effort: "medium", dependsOn: [], status: "pending" },
         { id: "verify", task: "Verify them", model: "luna", effort: "low", dependsOn: ["bugs"], status: "pending" }
       ]
     });

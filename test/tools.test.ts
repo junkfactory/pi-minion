@@ -71,7 +71,7 @@ describe("buildHelpModelList", () => {
 
 describe("RUN_PI_MINION_PARAMETERS", () => {
   function baseArgs(overrides: Record<string, unknown> = {}) {
-    return { task: "Explore the repo", model: "sonnet", context: "No prior context.", ...overrides };
+    return { task: "Explore the repo", model: "sonnet", effort: "medium", context: "No prior context.", ...overrides };
   }
 
   it("rejects a call that omits context", () => {
@@ -89,6 +89,11 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     const { model, ...withoutModel } = baseArgs();
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutModel), false);
   });
+
+  it("rejects a call missing effort", () => {
+    const { effort, ...withoutEffort } = baseArgs();
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutEffort), false);
+  });
 });
 
 describe("PI_MINION_EXAMPLES", () => {
@@ -105,7 +110,7 @@ describe("PI_MINION_EXAMPLES", () => {
 });
 
 describe("SCHEDULE_PI_MINION_PARAMETERS", () => {
-  const runArgs = { task: "Explore the repo", model: "sonnet", context: "No prior context." };
+  const runArgs = { task: "Explore the repo", model: "sonnet", effort: "medium", context: "No prior context." };
 
   it("accepts run_pi_minion's fields plus cron", () => {
     assert.equal(Check(SCHEDULE_PI_MINION_PARAMETERS, { ...runArgs, cron: "0 9 * * 1-5" }), true);
@@ -120,17 +125,19 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
   const args = {
     title: "Review",
     context: "No prior context.",
-    steps: [{ id: "a", task: "Find bugs", model: "sonnet" }]
+    steps: [{ id: "a", task: "Find bugs", model: "sonnet", effort: "medium" }]
   };
 
   it("accepts a minimal one-step workflow", () => {
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, args), true);
   });
 
-  it("rejects missing context or an empty step list", () => {
+  it("rejects missing context, an empty step list, or a step without effort", () => {
     const { context, ...withoutContext } = args;
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, withoutContext), false);
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [] }), false);
+    const { effort, ...stepWithoutEffort } = args.steps[0];
+    assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [stepWithoutEffort] }), false);
   });
 });
 
@@ -138,7 +145,7 @@ describe("SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS", () => {
   const args = {
     title: "Review",
     context: "No prior context.",
-    steps: [{ id: "a", task: "Find bugs", model: "sonnet" }]
+    steps: [{ id: "a", task: "Find bugs", model: "sonnet", effort: "medium" }]
   };
 
   it("requires cron on top of the workflow fields", () => {

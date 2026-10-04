@@ -1,6 +1,4 @@
 {
-  "defaultModel": "haiku",
-  "defaultEffort": "medium",
   "allowedModels": [],
   "allowedTools": [
     "Bash",

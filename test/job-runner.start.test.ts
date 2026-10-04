@@ -62,7 +62,7 @@ const noop = () => {};
 // Every JobUI method is a no-op, so the fake survives JobUI growing new methods.
 const fakeUI = new Proxy({}, { get: () => noop }) as unknown as Parameters<typeof startJob>[5];
 
-const request = (mode: string) => ({ task: `Do a thing MODE:${mode}`, workspace, model: "sonnet" });
+const request = (mode: string) => ({ task: `Do a thing MODE:${mode}`, workspace, model: "sonnet", effort: "medium" });
 const spawnCount = () =>
   existsSync(join(home, "spawned")) ? readFileSync(join(home, "spawned"), "utf8").trim().split("\n").length : 0;
 

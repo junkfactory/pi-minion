@@ -1,6 +1,4 @@
 export type MinionConfig = {
-  defaultModel: string;
-  defaultEffort: string;
   allowedModels: string[];
   allowedTools: string[];
   maxBudgetUsd: number;
@@ -16,7 +14,10 @@ export type MinionRequest = {
   task: string;
   workspace: string;
   model: string;
-  effort?: string;
+  // Required in practice: validateRequest() rejects a request without one.
+  // The schema fallback days are gone — pi-minion.json no longer carries a
+  // defaultEffort, so the caller always picks the level that fits the task.
+  effort: string;
   context?: string;
   maxBudgetUsd?: number;
 };

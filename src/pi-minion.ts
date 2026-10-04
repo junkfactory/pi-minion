@@ -81,39 +81,6 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => openPiMinionsPicker(ctx)
   });
 
-  // Disabled while we observe whether the registered tool is used effectively.
-  // Revisit this input interception if tool use proves insufficient.
-  /*
-  pi.on("input", async (event, ctx) => {
-    const match = /^(?:have\s+)?pi-minion\s+([\s\S]+)$/i.exec(
-      event.text.trim()
-    );
-    if (!match) return { action: "continue" };
-    const content = `## Pi minion request\n\n${event.text.trim()}`;
-    pi.appendEntry("pi-minion-display", { content, indent: true });
-    pi.sendMessage(
-      {
-        customType: "pi-minion-request",
-        content,
-        display: false
-      },
-      { triggerTurn: false, deliverAs: "followUp" }
-    );
-    const config = await loadConfig();
-    const id = await startJob(
-      {
-        task: match[1],
-        workspace: ctx.cwd,
-        model: config.defaultModel
-      },
-      ctx.cwd,
-      (message) => ctx.ui.notify(message, "info")
-    );
-    ctx.ui.notify(`Pi minion job ${id} is running in the background.`, "info");
-    return { action: "handled" };
-  });
-  */
-
   pi.on("session_shutdown", async (event, ctx) => {
     // `reason` is "quit" | "reload" | "new" | "resume" | "fork" — only "quit"
     // means the disposing session is really done, not swapped for a sibling

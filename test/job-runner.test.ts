@@ -78,6 +78,18 @@ describe("validateRequest", () => {
     }
   });
 
+  it("rejects a missing effort with a hint that tells the agent how to pick one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    try {
+      await assert.rejects(
+        validateRequest(fakeRequest({ workspace: dir, effort: undefined }), dir, fakeConfig()),
+        /effort is required.*low.*medium.*high/s
+      );
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("resolves the workspace to an absolute path on success", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {

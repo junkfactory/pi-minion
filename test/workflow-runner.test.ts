@@ -17,7 +17,6 @@ function harness(stepSpecs: Array<{ id: string; dependsOn?: string[]; task?: str
   const wf: MinionWorkflow = {
     title: "T",
     context: "No prior context.",
-    defaultEffort: "medium",
     maxResultPreviewBytes: 50_000,
     cwd: "/w",
     sessionId: "s1",
@@ -25,6 +24,7 @@ function harness(stepSpecs: Array<{ id: string; dependsOn?: string[]; task?: str
       id: spec.id,
       task: spec.task ?? `task ${spec.id}`,
       model: "sonnet",
+      effort: "medium",
       dependsOn: spec.dependsOn ?? [],
       status: "pending" as const
     })),
@@ -337,8 +337,8 @@ describe("scheduled workflows", () => {
           context: "No prior context.",
           maxBudgetUsd: 3,
           steps: [
-            { id: "a", task: "t", model: "sonnet" },
-            { id: "b", task: "t", model: "sonnet", maxBudgetUsd: 1 }
+            { id: "a", task: "t", model: "sonnet", effort: "medium" },
+            { id: "b", task: "t", model: "sonnet", effort: "medium", maxBudgetUsd: 1 }
           ]
         },
         { maxBudgetUsd: 99 }

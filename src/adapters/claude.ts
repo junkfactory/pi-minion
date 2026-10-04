@@ -43,7 +43,8 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     String(request.maxBudgetUsd ?? config.maxBudgetUsd),
     "--append-system-prompt",
     MINION_PROMPT_BASE,
-    ...(request.effort ? ["--effort", request.effort] : []),
+    "--effort",
+    request.effort,
     task
   ];
 }

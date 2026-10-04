@@ -11,8 +11,6 @@ import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    defaultModel: "gemini-flash",
-    defaultEffort: "medium",
     allowedModels: ["gemini-flash", "gemini-pro", "gpt-oss"],
     allowedTools: [],
     maxBudgetUsd: 5,
@@ -26,8 +24,9 @@ function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionRequest {
     task: "Explore the repo",
     workspace: "/tmp/workspace",
     model: "gemini-flash",
+    effort: "medium",
     ...overrides
-  };
+  } as MinionRequest;
 }
 
 describe("ownsModel", () => {
@@ -62,8 +61,8 @@ describe("buildArgs", () => {
     ]);
   });
 
-  it("falls back to config.defaultEffort when the request omits one", () => {
-    const args = buildArgs(fakeRequest(), fakeConfig({ defaultEffort: "high" }));
+  it("passes the request's effort through to --effort", () => {
+    const args = buildArgs(fakeRequest({ effort: "high" }), fakeConfig());
     assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), [
       "--effort",
       "high"

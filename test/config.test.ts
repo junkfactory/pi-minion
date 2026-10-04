@@ -19,8 +19,6 @@ describe("loadConfig", () => {
     // guaranteed-nonexistent override path here so this test stays
     // hermetic regardless of whether the real override file exists.
     const config = await loadConfig(join(tmpdir(), "pi-minion-test-no-override.json"));
-    assert.equal(config.defaultModel, "haiku");
-    assert.equal(config.defaultEffort, "medium");
     assert.deepEqual(config.allowedModels, []);
     assert.equal(config.maxOutputBytes, 15_000_000);
     assert.equal(config.maxResultPreviewBytes, 50_000);
@@ -34,7 +32,6 @@ describe("loadConfig", () => {
       await writeFile(overridePath, JSON.stringify({ maxBudgetUsd: 1 }), "utf8");
       const config = await loadConfig(overridePath);
       assert.equal(config.maxBudgetUsd, 1);
-      assert.equal(config.defaultModel, "haiku");
     } finally {
       await rm(dir, { recursive: true });
     }
@@ -51,12 +48,13 @@ describe("loadConfig", () => {
     }
   });
 
-  it("throws when defaultEffort is missing, same as defaultModel", async () => {
+  it("ignores a leftover defaultEffort key from older override files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");
     try {
-      await writeFile(overridePath, JSON.stringify({ defaultEffort: "" }), "utf8");
-      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+      await writeFile(overridePath, JSON.stringify({ defaultEffort: "medium" }), "utf8");
+      const config = await loadConfig(overridePath);
+      assert.deepEqual(config.allowedModels, []);
     } finally {
       await rm(dir, { recursive: true });
     }
@@ -73,7 +71,6 @@ describe("applyConfigOverride", () => {
     const base = fakeConfig({ maxBudgetUsd: 5 });
     const merged = applyConfigOverride(base, JSON.stringify({ maxBudgetUsd: 10 }));
     assert.equal(merged.maxBudgetUsd, 10);
-    assert.equal(merged.defaultModel, base.defaultModel);
   });
 
   it("replaces array fields wholesale rather than concatenating", () => {

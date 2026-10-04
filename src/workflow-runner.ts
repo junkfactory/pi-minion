@@ -240,7 +240,6 @@ export function tickWorkflowSchedule(scheduleId: string, deps: WorkflowDeps): "s
   workflows.set(
     id,
     newWorkflow(def, {
-      defaultEffort: schedule.effort,
       maxResultPreviewBytes: schedule.maxResultPreviewBytes,
       cwd: schedule.cwd,
       sessionId: schedule.sessionId,

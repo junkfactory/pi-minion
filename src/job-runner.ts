@@ -64,6 +64,10 @@ export async function validateRequest(
     throw new Error("maxBudgetUsd must be a positive number");
   }
   if (!request.task.trim()) throw new Error("task is required");
+  if (!request.effort?.trim())
+    throw new Error(
+      "effort is required — pick the level that fits the task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes (auth, money, data deletion, concurrency)."
+    );
   if (request.context !== undefined) {
     const remainder = request.context
       .replace(/no prior context/i, "")
@@ -112,7 +116,6 @@ export async function startJob(
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
   const title = workflowStep?.title ?? deriveJobTitle(request.task);
-  const resolvedEffort = request.effort ?? config.defaultEffort;
   jobMeta.set(id, {
     title,
     model: request.model,
@@ -180,7 +183,7 @@ export async function startJob(
     jobUI.setJob(id, {
       title,
       model: displayModel(),
-      effort: resolvedEffort,
+      effort: request.effort,
       startedAt,
       previewLine: lastPreviewLine,
       tokenUsage: runningTokens && { ...runningTokens }

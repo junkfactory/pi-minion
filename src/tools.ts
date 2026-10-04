@@ -77,7 +77,7 @@ export const PI_MINION_EXAMPLES = [
 // descriptions.
 export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result.",
-  "effort and maxBudgetUsd are optional; omit them to use the configured defaults.",
+  "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd.",
   "model must be one of `models` above — already filtered to what's installed on this machine.",
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
   "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Step results post quietly and one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
@@ -91,12 +91,10 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   model: Type.String({
     description: "A model usable on this machine; call help_pi_minion to list them."
   }),
-  effort: Type.Optional(
-    Type.String({
-      description:
-        "Optional effort/thinking level, such as low, medium, or high."
-    })
-  ),
+  effort: Type.String({
+    description:
+      "Required effort/thinking level that fits the task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes (auth, money, data deletion, concurrency)."
+  }),
   context: Type.String({
     description:
       "Prior findings, decisions, files, diffs, commands, or other evidence this task depends on — restate it verbatim, don't summarize it. A reference to an earlier job id is not enough, since this job cannot look it up. If this is a genuinely fresh task with no prior context, the whole value must be just that (e.g. \"No prior context.\") — never combine it with other details. Required so context is never silently left out."
@@ -136,7 +134,10 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
           "Self-contained task for this step. May contain {{steps.<id>.result}}; every id it references must be listed in dependsOn."
       }),
       model: Type.String({ description: "A model usable on this machine; call help_pi_minion to list them." }),
-      effort: Type.Optional(Type.String({ description: "Optional effort/thinking level." })),
+      effort: Type.String({
+        description:
+          "Required effort/thinking level that fits this step's task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes."
+      }),
       dependsOn: Type.Optional(
         Type.Array(Type.String(), {
           description:
@@ -450,7 +451,7 @@ export function registerTools(pi: ExtensionAPI): void {
         title,
         cron,
         request,
-        effort: request.effort ?? config.defaultEffort,
+        effort: request.effort,
         cwd: ctx.cwd,
         sessionId,
         sessionFile,
@@ -566,7 +567,6 @@ export function registerTools(pi: ExtensionAPI): void {
       workflows.set(
         id,
         newWorkflow(request, {
-          defaultEffort: config.defaultEffort,
           maxResultPreviewBytes: config.maxResultPreviewBytes ?? DEFAULT_MAX_RESULT_PREVIEW_BYTES,
           cwd: ctx.cwd,
           sessionId: ctx.sessionManager.getSessionId(),
@@ -620,7 +620,6 @@ export function registerTools(pi: ExtensionAPI): void {
         // Caps pinned now: runs use the approved budget, not a later config value.
         def: withEffectiveBudgets(request, config),
         maxResultPreviewBytes: config.maxResultPreviewBytes ?? DEFAULT_MAX_RESULT_PREVIEW_BYTES,
-        effort: config.defaultEffort,
         cwd: ctx.cwd,
         sessionId: ctx.sessionManager.getSessionId(),
         sessionFile: ctx.sessionManager.getSessionFile(),

@@ -18,8 +18,6 @@ import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    defaultModel: "sonnet",
-    defaultEffort: "medium",
     allowedModels: ["sonnet", "opus"],
     allowedTools: [],
     maxBudgetUsd: 5,
@@ -33,8 +31,9 @@ function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionRequest {
     task: "Explore the repo",
     workspace: "/tmp/workspace",
     model: "sonnet",
+    effort: "medium",
     ...overrides
-  };
+  } as MinionRequest;
 }
 
 describe("ownsModel", () => {
@@ -421,7 +420,6 @@ describe("buildArgs", () => {
   it("omits optional flags when not requested", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     assert.ok(!args.includes("--allowedTools"));
-    assert.ok(!args.includes("--effort"));
     assert.equal(args.at(-1), "Explore the repo");
   });
 

@@ -12,8 +12,8 @@ import type { WorkflowDef } from "./workflow-store.js";
 type ScheduleBase = {
   title: string;
   cron: string;
-  // request.effort, or pi-minion.json's defaultEffort when omitted.
-  effort: string;
+  // request.effort (job schedules only; workflows carry effort per step).
+  effort?: string;
   cwd: string;
   sessionId: string;
   sessionFile?: string;
@@ -128,7 +128,7 @@ export function formatScheduleLabel(
     return `${glyph("⏱⇉ ")}${schedule.title} · ${schedule.def.steps.length} steps · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
   }
   const model = resolvedModel ?? schedule.request.model;
-  return `${glyph("⏱ ")}${schedule.title} · ${model} / ${schedule.effort} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
+  return `${glyph("⏱ ")}${schedule.title} · ${model}${schedule.effort ? ` / ${schedule.effort}` : ""} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
 }
 
 // Lets a scheduled minion end its own schedule ("monitor X until Y"): the

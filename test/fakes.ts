@@ -3,8 +3,6 @@ import type { MinionConfig, MinionRequest } from "../src/adapters/types.js";
 
 export function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    defaultModel: "sonnet",
-    defaultEffort: "medium",
     allowedModels: ["sonnet", "opus"],
     allowedTools: [],
     maxBudgetUsd: 5,
@@ -18,6 +16,7 @@ export function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionReque
     task: "Explore the repo",
     workspace: "/tmp/workspace",
     model: "sonnet",
+    effort: "medium",
     ...overrides
   };
 }

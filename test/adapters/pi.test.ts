@@ -13,8 +13,6 @@ import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    defaultModel: "gpt-6-luna",
-    defaultEffort: "medium",
     allowedModels: ["gpt-6-luna", "gpt-5.6-terra"],
     allowedTools: [],
     maxBudgetUsd: 5,
@@ -28,8 +26,9 @@ function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionRequest {
     task: "Explore the repo",
     workspace: "/tmp/workspace",
     model: "gpt-6-luna",
+    effort: "medium",
     ...overrides
-  };
+  } as MinionRequest;
 }
 
 function flagValue(args: string[], flag: string): string | undefined {
@@ -106,8 +105,8 @@ describe("buildArgs", () => {
     }
   });
 
-  it("falls back to config.defaultEffort when the request omits one", () => {
-    const args = buildArgs(fakeRequest(), fakeConfig({ defaultEffort: "high" }));
+  it("passes the request's effort through to --thinking", () => {
+    const args = buildArgs(fakeRequest({ effort: "high" }), fakeConfig());
     assert.equal(flagValue(args, "--thinking"), "high");
   });
 

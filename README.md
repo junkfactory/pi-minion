@@ -33,7 +33,7 @@ workflows fan out one job per step.
 
 ### Delegate a task
 
-**`run_pi_minion(task, model, effort?, context, maxBudgetUsd?)`** — spawn a
+**`run_pi_minion(task, model, effort, context, maxBudgetUsd?)`** — spawn a
 background job. Spawns `claude -p --permission-mode auto ...` as a detached
 child process and returns a job ID immediately, so your session keeps working
 while the minion runs. The result arrives later as a transcript message plus a
@@ -56,7 +56,7 @@ for a follow-up task.
 
 ### Schedule jobs
 
-**`schedule_pi_minion(task, model, effort?, context, maxBudgetUsd?, cron)`** —
+**`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, cron)`** —
 run the same request on a cron schedule (local time, 5 or 6 fields, via
 [croner](https://github.com/hexagon/croner)).
 
@@ -80,7 +80,7 @@ workflow schedule).
 ### Run workflows
 
 **`run_pi_minion_workflow(title, context, maxBudgetUsd?, steps)`** — run a
-small dependency graph of minion jobs: `steps: [{ id, task, model, effort?,
+small dependency graph of minion jobs: `steps: [{ id, task, model, effort,
 dependsOn?, maxBudgetUsd? }]`, at most 10, up to 4 running at once. A step
 starts as soon as its `dependsOn` steps are done and receives their results.
 
@@ -224,7 +224,6 @@ You can then prompt pi like
 
 | Field                   | Required     | Meaning                                                                                                                                                                                                                         |
 |-------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `defaultModel`          | yes          | Fallback model when a caller doesn't specify one.                                                                                                                                                                               |
 | `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed.                                                                   |
 | `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                 |
 | `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                                                                                                |

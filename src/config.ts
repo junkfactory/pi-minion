@@ -58,8 +58,6 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     : undefined;
   const config = applyConfigOverride(base, overrideText, overridePath);
   if (
-    !config.defaultModel ||
-    !config.defaultEffort ||
     !Array.isArray(config.allowedModels) ||
     !Array.isArray(config.allowedTools)
   ) {
