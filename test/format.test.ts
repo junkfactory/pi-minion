@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { formatTokenCount, formatTokenUsage } from "../src/agent.ui.js";
-import { deriveJobTitle, describeJobResult, formatCostUsd, formatJobFrontmatter, formatModelBreakdown, formatTokenModelBreakdown, thinkingPlaceholder, tokenCountsFromUsage, truncateResultForContext } from "../src/format.js";
+import { deriveJobTitle, describeJobResult, formatCostUsd, formatJobFrontmatter, formatModelBreakdown, formatRelative, formatTokenModelBreakdown, thinkingPlaceholder, tokenCountsFromUsage, truncateResultForContext } from "../src/format.js";
 
 function fakeOutcome(overrides: Partial<Parameters<typeof describeJobResult>[0]> = {}) {
   return {
@@ -377,5 +377,37 @@ describe("tokenCountsFromUsage", () => {
       tokenCountsFromUsage({ totalCostUsd: 0, inputTokens: 1, outputTokens: 2, cacheWriteTokens: 3, cacheReadTokens: 4, perModel: [] }),
       { input: 1, output: 2, cacheWrite: 3, cacheRead: 4 }
     );
+  });
+});
+
+describe("formatRelative", () => {
+  const now = 1_700_000_000_000;
+
+  it("says 'just now' under 60 seconds", () => {
+    assert.equal(formatRelative(now - 59_000, now), "just now");
+  });
+
+  it("crosses into whole minutes at the 60-second boundary", () => {
+    assert.equal(formatRelative(now - 60_000, now), "1m ago");
+  });
+
+  it("renders a mid-range minute value", () => {
+    assert.equal(formatRelative(now - 3 * 60_000, now), "3m ago");
+  });
+
+  it("crosses into whole hours at the 60-minute boundary", () => {
+    assert.equal(formatRelative(now - 60 * 60_000, now), "1h ago");
+  });
+
+  it("renders a mid-range hour value", () => {
+    assert.equal(formatRelative(now - 3 * 60 * 60_000, now), "3h ago");
+  });
+
+  it("crosses into whole days at the 24-hour boundary", () => {
+    assert.equal(formatRelative(now - 24 * 60 * 60_000, now), "1d ago");
+  });
+
+  it("renders a mid-range day value", () => {
+    assert.equal(formatRelative(now - 5 * 24 * 60 * 60_000, now), "5d ago");
   });
 });

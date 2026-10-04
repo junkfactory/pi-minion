@@ -119,6 +119,25 @@ by replaying the real parsing functions against a live job's `stdout.json`
 end-to-end, so a freeze *after* real text has already started streaming
 points at something new, not this.
 
+**A minion is burning tokens in what looks like a stuck loop (or collecting
+permission denials), and you only find out when it finishes.**
+Nothing alerts mid-run by design — pi-minion is fire-and-forget (no
+status/result-check tool, no mid-run surface), so the only signals today are
+passive: open `/pi-minions` (default `alt+j`) and look at the live modal for
+the same tool call repeating with identical args or erroring over and over,
+or `grep '"tool_use"' stdout.json` in the job directory
+(`~/.pi/agent/pi-minion/<id>/`) to count repeated calls from outside the
+session. Permission denials notably stay invisible in the widget/modal and
+surface only in the final result's denial warning (see
+`sawPermissionDenial` in `src/job-runner.ts`). If you spot a loop, cancel
+with `cancel_pi_minion` and re-run with the same `context` plus the
+correction — any edits already made are on disk in the workspace, so the
+re-spawn loses little. A proactive mid-run push (notify on a repeated
+same-args error loop or a permission denial, instead of waiting for the
+final report) is the identified cheap-observability improvement here —
+tabled for now, not implemented; if you find yourself opening `alt+j` to
+snoop for loops regularly, that is the signal to pick it up.
+
 **Job output is missing past a certain point.**
 Check whether `maxOutputBytes` was hit (`exceededOutputLimit` in the
 result message) — raise it in `pi-minion.json` if legitimate runs need

@@ -50,7 +50,12 @@ export function fakeTui(rows = 40) {
 
 export type WidgetFactory = (tui: unknown, theme: unknown) => { render(width: number): string[] };
 
-export function fakeCtx(theme: ReturnType<typeof fakeTheme> = fakeTheme()) {
+export function fakeCtx(
+  theme: ReturnType<typeof fakeTheme> = fakeTheme(),
+  options: { sessionId?: string; cwd?: string; confirmReturn?: boolean } = {}
+) {
+  const sessionId = options.sessionId ?? "test-session";
+  const cwd = options.cwd ?? "/tmp/workspace";
   const state = {
     widgetFactory: undefined as WidgetFactory | undefined,
     widgetRemoved: false,
@@ -59,9 +64,20 @@ export function fakeCtx(theme: ReturnType<typeof fakeTheme> = fakeTheme()) {
       | ((tui: unknown, theme: unknown, keybindings: unknown, done: (r: unknown) => void) => unknown)
       | undefined,
     selectReturn: undefined as string | undefined,
-    selectOptions: undefined as string[] | undefined
+    selectOptions: undefined as string[] | undefined,
+    confirmCalls: [] as Array<{ title: string; body: string }>,
+    confirmReturn: options.confirmReturn ?? true,
+    // Resolves the pending ctx.ui.custom promise — tests close overlays
+    // (e.g. the trail browser) by invoking the `done` callback they
+    // captured from the factory, which calls this with undefined.
+    customResolve: undefined as ((result?: unknown) => void) | undefined
   };
   const ctx = {
+    cwd,
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => undefined
+    },
     ui: {
       get theme() {
         return theme;
@@ -80,12 +96,18 @@ export function fakeCtx(theme: ReturnType<typeof fakeTheme> = fakeTheme()) {
         state.selectOptions = options;
         return state.selectReturn;
       },
+      confirm: async (title: string, body: string) => {
+        state.confirmCalls.push({ title, body });
+        return state.confirmReturn;
+      },
       custom: (factory: typeof state.customFactory) => {
         state.customFactory = factory;
-        return new Promise(() => {
-          // Never resolves on its own in these tests — the modal component's
-          // own `done()` callback (passed into the factory below) is what a
-          // real ctx.ui.custom() would use to resolve this promise.
+        return new Promise((resolve) => {
+          // Stashed so tests can resolve it (e.g. by invoking the `done`
+          // callback they passed into the factory). The trail browser
+          // component captures `done` and calls it on Esc/q/ctrl+c; tests
+          // capture it via state.killCustom() to drive the browser closed.
+          state.customResolve = resolve;
         });
       }
     }

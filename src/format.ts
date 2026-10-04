@@ -213,3 +213,13 @@ export function truncateResultForContext(
     `[Truncated: ${shown} lines shown (${kb}KB limit). Full result at ${resultPath} — read it directly from offset=${shown + 1} for the rest.]`
   ].join("\n");
 }
+
+// Whole-unit "ago" labels for finished-trail rows (meta.finishedAt, step
+// finishedAt). Always called on past values; not a general "in X" formatter.
+export function formatRelative(timestamp: number, now = Date.now()): string {
+  const seconds = Math.floor((now - timestamp) / 1000);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86_400)}d ago`;
+}

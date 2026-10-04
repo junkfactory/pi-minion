@@ -44,4 +44,8 @@ export type JobMetaEntry = {
   status: JobMetaStatus;
   finishedAt?: number;
   reportPath?: string;
+  // Set when this job is a workflow step (the owning workflow's map key);
+  // lets the /pi-minions picker list step-owned metas separately from
+  // standalone jobs and keep each finished workflow's steps grouped.
+  workflowId?: string;
 };

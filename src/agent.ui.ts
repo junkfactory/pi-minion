@@ -133,10 +133,16 @@ export interface JobUI {
    * reopened job's tool-call rows (not just its text) requires replaying
    * events via the methods below instead.
    */
+  /** Modal: open the detail overlay. The returned promise resolves when the
+   *  user closes it (or the ctx goes stale) — callers that re-present an
+   *  overlay of their own must await it, or the two overlays fight for
+   *  keybindings and Esc reaches the wrong one. Fire-and-forget is fine when
+   *  nothing is stacked above the session afterward.
+   */
   openModal(
     id: string,
-    initial: { title: string; model: string; prompt: string; text?: string; effort?: string }
-  ): void;
+    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean }
+  ): Promise<void>;
   /** Modal: feed a streamed text chunk to the open modal, if one is open for this id. No-op otherwise. */
   appendModalText(id: string, text: string): void;
   /** Modal: force a new text-block boundary. No-op if nothing has been emitted yet, or no modal is open for this id. */
@@ -155,6 +161,16 @@ export interface JobUI {
   setModalModel(id: string, model: string): void;
   /** Modal: mark the open modal's job finished, if one is open for this id. No-op otherwise; does not close it. */
   finishModalJob(id: string): void;
+  /**
+   * Modal: register an externally-owned ModalState as the currently active
+   * detail, so stream mutators (appendModalText / startModalTextBlock /
+   * startModalToolCall / updateModalToolCallArgs / finishModalToolCall /
+   * setModalModel / finishModalJob) route to it. Pass undefined to clear
+   * the reference (e.g. when a custom overlay closes its inline detail).
+   * Use only from a single active detail at a time — assigning overwrites
+   * any previous active detail without notifying its owner.
+   */
+  setActiveDetail(state: ModalState | undefined): void;
   /** Tear down widget/timers. */
   dispose(): void;
 }
@@ -188,7 +204,7 @@ type ModalToolCallBlock = {
 // extra position bookkeeping.
 type ModalBlock = ModalTextBlock | ModalToolCallBlock;
 
-type ModalState = {
+export type ModalState = {
   jobId: string;
   title: string;
   model: string;
@@ -203,7 +219,7 @@ type ModalState = {
   requestRender: () => void;
 };
 
-function renderModalBlock(theme: Theme, block: ModalBlock): string {
+export function renderModalBlock(theme: Theme, block: ModalBlock): string {
   if (block.type === "text") return block.text;
   const name = theme.bold(theme.fg("accent", block.name));
   const argsSnippet = block.args
@@ -368,7 +384,7 @@ function formatWidgetLines(
 
 // The bordered box shared by the detail modal and the workflow confirm
 // dialog: each row is truncated to the inner width; null draws a ├─┤ divider.
-function frameLines(border: (text: string) => string, width: number, rows: Array<string | null>): string[] {
+export function frameLines(border: (text: string) => string, width: number, rows: Array<string | null>): string[] {
   const innerWidth = Math.max(4, width - 4);
   const rule = (left: string, right: string) => border(`${left}${"─".repeat(width - 2)}${right}`);
   return [
@@ -382,7 +398,7 @@ function frameLines(border: (text: string) => string, width: number, rows: Array
   ];
 }
 
-class JobDetailModal implements Component {
+export class JobDetailModal implements Component {
   // Visible body height from the last render(); the shift+up/down page size.
   private pageRows = 1;
 
@@ -535,8 +551,8 @@ export function renderWorkflowConfirmBody(theme: Theme, confirm: WorkflowConfirm
 
 const CONFIRM_OPTIONS = ["Yes", "No"] as const;
 const CONFIRM_HEIGHT_RATIO = 0.9;
-// Top border, blank, two options, blank, hint, bottom border.
-const CONFIRM_CHROME_LINES = 7;
+// Top border, title rule, blank, two options, blank, hint, bottom border.
+const CONFIRM_CHROME_LINES = 8;
 // Rows reserved for the "↑ N more" / "↓ N more" lines while the body overflows.
 const CONFIRM_INDICATOR_LINES = 2;
 
@@ -606,6 +622,7 @@ class WorkflowConfirmDialog implements Component {
     });
     return frameLines(border, width, [
       ...title,
+      null,
       ...body,
       "",
       ...options,
@@ -694,13 +711,14 @@ export function createJobUI(
 
   const requestWidgetRender = () => widgetTui?.requestRender();
 
-  function safeUi(fn: () => void): void {
+  function safeUi<T>(fn: () => T): T | undefined {
     try {
-      fn();
+      return fn();
     } catch {
       // ctx invalidated by a session reload/new/fork/switchSession while a
       // background job outlives the session that started it — UI updates
       // are best-effort; the job itself keeps running regardless.
+      return undefined;
     }
   }
 
@@ -845,8 +863,8 @@ export function createJobUI(
 
   function openModal(
     id: string,
-    initial: { title: string; model: string; prompt: string; text?: string; effort?: string }
-  ): void {
+    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean }
+  ): Promise<void> {
     const state: ModalState = {
       jobId: id,
       title: initial.title,
@@ -854,30 +872,34 @@ export function createJobUI(
       effort: initial.effort,
       prompt: initial.prompt,
       blocks: initial.text ? [{ type: "text", text: initial.text }] : [],
-      finished: false,
+      finished: initial.finished ?? false,
       scrollOffset: 0,
       autoScroll: true,
       requestRender: () => {}
     };
     activeModal = state;
-    safeUi(() => {
-      ctx.ui
-        .custom<undefined>(
-          (tui, _theme, _keybindings, done) => {
-            state.requestRender = () => tui.requestRender();
-            return new JobDetailModal(ctx, tui, state, done, () => {
-              if (activeModal === state) activeModal = undefined;
-            });
-          },
-          {
-            overlay: true,
-            overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" }
-          }
-        )
-        .catch(() => {
-          if (activeModal === state) activeModal = undefined;
-        });
-    });
+    const opened = safeUi(() =>
+      ctx.ui.custom<undefined>(
+        (tui, _theme, _keybindings, done) => {
+          state.requestRender = () => tui.requestRender();
+          return new JobDetailModal(ctx, tui, state, done, () => {
+            if (activeModal === state) activeModal = undefined;
+          });
+        },
+        {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" }
+        }
+      )
+    );
+    return (opened ?? Promise.resolve()).then(
+      () => {
+        if (activeModal === state) activeModal = undefined;
+      },
+      () => {
+        if (activeModal === state) activeModal = undefined;
+      }
+    );
   }
 
   function appendModalText(id: string, text: string): void {
@@ -937,6 +959,16 @@ export function createJobUI(
     activeModal.requestRender();
   }
 
+  // Externally-owned ModalState (e.g. the trail browser's inline detail
+  // view) registers itself here so stream mutators route to it; `undefined`
+  // clears the reference. The trail browser always pairs open with close,
+  // so no identity guard is needed — overwriting simply steals the routing
+  // from whatever was active, which is what openModal's flow already does
+  // for a fresh live modal.
+  function setActiveDetail(state: ModalState | undefined): void {
+    activeModal = state;
+  }
+
   function dispose(): void {
     stopSpinner();
     if (widgetTui) {
@@ -962,6 +994,7 @@ export function createJobUI(
     finishModalToolCall,
     setModalModel,
     finishModalJob,
+    setActiveDetail,
     dispose
   };
 }

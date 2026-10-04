@@ -37,7 +37,7 @@ export type WorkflowDeps = {
     request: MinionRequest,
     wf: MinionWorkflow,
     onSettled: (outcome: StepOutcome) => void,
-    step: { title: string; id: string },
+    step: { title: string; id: string; workflowId: string },
     // Checked right before spawning; true means the step was cancelled while
     // starting, so startStep must reject without spawning.
     isCancelled: () => boolean
@@ -174,7 +174,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     maxBudgetUsd: step.maxBudgetUsd ?? wf.maxBudgetUsd
   };
   const isCancelled = () => step.status !== "running";
-  deps.startStep(request, wf, settle, { title: workflowStepTitle(wf.title, step.id), id: step.id }, isCancelled).then(
+  deps.startStep(request, wf, settle, { title: workflowStepTitle(wf.title, step.id), id: step.id, workflowId: id }, isCancelled).then(
     (jobId) => {
       if (step.status === "running") {
         step.jobId = jobId;

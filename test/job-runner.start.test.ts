@@ -104,7 +104,7 @@ describe("startJob", () => {
     const outcomes: Outcome[] = [];
     const id = await startJob(
       request("ok"), workspace, sessionId, undefined, (m) => notes.push(m), fakeUI,
-      undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1" }
+      undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1", workflowId: "wf" }
     );
     await waitFor(() => outcomes.length > 0 && posts.length > 0);
     assert.equal(posts.length, 1);
@@ -128,7 +128,7 @@ describe("startJob", () => {
     const outcomes: Outcome[] = [];
     await startJob(
       request("fail"), workspace, sessionId, undefined, noop, fakeUI,
-      undefined, (o) => outcomes.push(o), { title: "wf › bad", id: "bad" }
+      undefined, (o) => outcomes.push(o), { title: "wf › bad", id: "bad", workflowId: "wf" }
     );
     await waitFor(() => outcomes.length > 0 && posts.length > 0);
     assert.equal(outcomes.length, 1);
@@ -155,7 +155,7 @@ describe("startJob", () => {
         const outcomes: Outcome[] = [];
         const id = await startJob(
           request("ok"), workspace, sessionId, undefined, noop, fakeUI,
-          undefined, (o) => outcomes.push(o), { title: "wf › missing", id: "missing" }
+          undefined, (o) => outcomes.push(o), { title: "wf › missing", id: "missing", workflowId: "wf" }
         );
         await waitFor(() => outcomes.length > 0 && posts.length > 0);
         assert.equal(outcomes.length, 1);
@@ -183,7 +183,7 @@ describe("startJob", () => {
     await assert.rejects(
       startJob(
         request("ok"), workspace, sessionId, undefined, noop, fakeUI,
-        undefined, (o) => outcomes.push(o), { title: "wf › cancelled", id: "cancelled" }, () => true
+        undefined, (o) => outcomes.push(o), { title: "wf › cancelled", id: "cancelled", workflowId: "wf" }, () => true
       ),
       /Cancelled before the pi minion started/
     );
@@ -204,7 +204,7 @@ describe("startJob", () => {
     const outcomes: Outcome[] = [];
     const id = await startJob(
       request("ok"), workspace, sessionId, workflow.file, noop, fakeUI,
-      undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1" }
+      undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1", workflowId: "wf" }
     );
     await waitFor(() => outcomes.length > 0 && posts.length > 0);
     workflow.finish("SUMMARY");

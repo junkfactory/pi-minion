@@ -459,6 +459,18 @@ describe("modal", () => {
     assert.ok(component.render(60).some((l) => l.includes("finished")));
   });
 
+  it("shows a finished marker when openModal is constructed with finished: true", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.openModal("modalJob", { title: "Modal Job", model: "opus", prompt: "",
+      text: "hi", finished: true });
+    const component = state.customFactory!(fakeTui(), fakeTheme(), {}, () => {}) as {
+      render(width: number): string[];
+    };
+
+    assert.ok(component.render(60).some((l) => l.includes("finished")));
+  });
+
   it("distinguishes Escape from an Up-arrow sequence and only closes on Escape", () => {
     const { ctx, state } = fakeCtx();
     const jobUI = createJobUI(ctx as any);

@@ -102,7 +102,7 @@ export async function startJob(
   // frontmatter; the child session is named by `id`, since /resume already
   // shows it under its workflow's session. Also skips the "started" notify
   // (the widget shows it).
-  workflowStep?: { title: string; id: string },
+  workflowStep?: { title: string; id: string; workflowId: string },
   // Workflow steps only: checked right before the process spawns; true means
   // the step was cancelled while this job was still starting, so nothing is
   // spawned (no paid process) and the promise rejects.
@@ -125,7 +125,8 @@ export async function startJob(
     // Resolved now, not taken as-is: a session replaced while this job was
     // still loading config points at its replacement.
     sessionId: resolveSessionId(sessionId),
-    status: "running"
+    status: "running",
+    ...(workflowStep && { workflowId: workflowStep.workflowId })
   });
   const jobDir = join(JOB_ROOT, id);
   // Anything failing between "running" and a live process must not leave the
