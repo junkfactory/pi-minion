@@ -455,8 +455,10 @@ class TrailBrowser implements Component {
 
   // Builds the full list-view rows once so both the renderer and the
   // cursor-index helper see the same layout. Returns an array indexed
-  // by display row position; null = section divider (rendered as a
-  // horizontal rule by frameLines), string = content row.
+  // by display row position; null = title-bar and footer-bar rules
+  // (rendered as full-strength ├──┤ by frameLines), string = content
+  // row — section dividers use mutedRule() so only the title/footer
+  // chrome keeps the accent border.
   private buildListRows(): Array<string | null> {
     const theme = this.ctx.ui.theme;
     const innerWidth = Math.max(4, this.lastRenderWidth - 4);
@@ -476,7 +478,7 @@ class TrailBrowser implements Component {
           rows.push(this.renderListRow(theme, row, index === this.listCursor, innerWidth));
         });
       }
-      rows.push(null);
+      rows.push(this.mutedRule(innerWidth));
       rows.push(this.renderSectionHeader(theme, "Completed workflows", innerWidth));
       if (workflows.length === 0) {
         rows.push(theme.fg("muted", "  (none)"));
@@ -571,6 +573,14 @@ class TrailBrowser implements Component {
     rows.push(null);
     rows.push(theme.fg("muted", "↑↓ navigate  Enter open detail  Esc back"));
     return rows;
+  }
+
+  // Non-title, non-footer divider: a muted full-width rule rendered as
+  // a content row (the pattern JobDetailModal uses for its in-content
+  // separator). The title-bar and footer-bar rules stay full-strength
+  // ├──┤ null dividers.
+  private mutedRule(innerWidth: number): string {
+    return this.ctx.ui.theme.fg("borderMuted", "─".repeat(innerWidth));
   }
 
   private stepsRowIndex(): number {

@@ -460,7 +460,7 @@ export class JobDetailModal implements Component {
       header,
       null,
       ...visible,
-      separator,
+      null,
       theme.fg("syntaxComment", MODAL_FOOTER_HINT)
     ]);
   }
