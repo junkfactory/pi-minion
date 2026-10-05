@@ -8,9 +8,9 @@ import {
   ownsModel,
   parseAgyModelsList,
   parseLine,
-  resolveAlias,
   setAgyModelsForTesting
 } from "../../src/adapters/agy.js";
+import { resolveAlias } from "../../src/adapters/util.js";
 import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 // The `agy --output-format=json models` payload captured in-session

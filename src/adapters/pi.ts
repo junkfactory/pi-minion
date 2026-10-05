@@ -9,7 +9,7 @@ import type {
   UsageTotals
 } from "./types.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MINION_PROMPT_BASE, resolveTaskText, sumFields } from "./util.js";
+import { MINION_PROMPT_BASE, EFFORT_RANK, resolveTaskText, sumFields } from "./util.js";
 
 // Captured from the extension ctx by pi-minion.ts's session_start handler
 // (same capture-and-refresh shape as jobUI's setCtx): the parent pi process
@@ -22,11 +22,32 @@ export function setModelRegistry(registry: ModelRegistry | undefined): void {
   modelRegistry = registry;
 }
 
-// Deduped bare ids of the available catalog — the universe help_pi_minion
-// lists when allowedModels is empty. Each id is routable by some present
-// adapter (registry check order keeps claude/agy claims ahead of pi's).
+// pi's alias rule is the TRAILING token ("luna" from gpt-6-luna — verified
+// against the pi CLI's own fuzzy matcher), NOT agy's version-stripped stem
+// ("gemini-flash" from gemini-3.8-flash-high), so the shared
+// deriveAliasClusters machinery in util.ts doesn't apply here; these few
+// lines derive pi's own alias universe instead. Version-shaped and
+// effort-shaped trailing tokens are skipped — "claude-sonnet-5-5" shouldn't
+// suggest "5", and no real model is named "medium".
+function piAliasCandidates(ids: string[]): string[] {
+  return [
+    ...new Set(
+      ids
+        .map((id) => id.split("-").pop() ?? "")
+        .filter((token) => token && !/^\d/.test(token) && !(token in EFFORT_RANK))
+    )
+  ];
+}
+
+// help_pi_minion's universe when allowedModels is empty: short aliases
+// first, then deduped bare ids of the available catalog. Resolution stays
+// delegated — the pi CLI fuzzy-matches at spawn ("--model luna" runs
+// gpt-6-luna over gpt-5.6-luna), so pi-minion only enumerates, never
+// resolves. Each entry is routable by some present adapter (registry check
+// order keeps claude/agy claims ahead of pi's).
 export function availableModelIds(): string[] {
-  return [...new Set((modelRegistry?.getAvailable() ?? []).map((model) => model.id))];
+  const ids = [...new Set((modelRegistry?.getAvailable() ?? []).map((model) => model.id))];
+  return [...new Set([...piAliasCandidates(ids), ...ids])];
 }
 
 // pi's --model accepts patterns (short alias names like "luna" fuzzy-match

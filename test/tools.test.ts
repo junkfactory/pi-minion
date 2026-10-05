@@ -106,10 +106,11 @@ describe("buildHelpModelList", () => {
         ],
         { allowedModels: [], blockedModels: [] }
       );
-      // claude's own aliases (sonnet/opus/haiku/fable) + pi's live
-      // catalog (gpt-6-luna, deduped across providers); anything the
+      // claude's own aliases (sonnet/opus/haiku/fable) + pi's live catalog:
+      // its derived short alias (luna, from the trailing token of
+      // gpt-6-luna, deduped across providers) plus the bare id. Anything the
       // adapters don't claim is filtered out.
-      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "gpt-6-luna"]);
+      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "luna", "gpt-6-luna"]);
     } finally {
       setModelRegistry(undefined);
     }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import {
+  availableModelIds,
   buildArgs,
   describeUnsupported,
   environment,
@@ -67,6 +68,32 @@ describe("ownsModel", () => {
     assert.equal(ownsModel("sol"), true);
     assert.equal(ownsModel("terra"), false);
     assert.equal(ownsModel("astra"), false);
+  });
+
+  it("enumerates trailing-token aliases before bare ids for help_pi_minion", () => {
+    // Version- and effort-shaped trailing tokens ("5" from
+    // claude-opus-5-5) are not aliases — piAliasCandidates skips them.
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "openai-codex" },
+        { id: "gpt-6.1-sol", provider: "openai-codex" },
+        { id: "gemini-3.1-pro", provider: "google" },
+        { id: "claude-opus-5-5", provider: "anthropic" }
+      ])
+    );
+    try {
+      assert.deepEqual(availableModelIds(), [
+        "luna",
+        "sol",
+        "pro",
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "gemini-3.1-pro",
+        "claude-opus-5-5"
+      ]);
+    } finally {
+      setModelRegistry(undefined);
+    }
   });
 
   it("claims nothing without a captured registry", () => {

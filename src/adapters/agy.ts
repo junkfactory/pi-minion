@@ -7,7 +7,14 @@ import type {
   MinionConfig,
   MinionRequest
 } from "./types.js";
-import { MINION_PROMPT_BASE, resolveTaskText, sumFields } from "./util.js";
+import {
+  MINION_PROMPT_BASE,
+  resolveTaskText,
+  sumFields,
+  resolveAlias,
+  deriveAliasClusters
+} from "./util.js";
+import type { AliasCluster } from "./util.js";
 
 // The live model catalog, parsed from `agy --output-format=json models`.
 // Everything below (ownership, derived aliases, help ids, --model resolution)
@@ -90,86 +97,18 @@ export function setAgyModelsForTesting(entries: AgyModelEntry[] | undefined): vo
   cache = entries ? { entries, fetchedAt: Date.now() } : undefined;
 }
 
-// Version segment of a catalog id: the digit-led token
-// ("gemini-3.8-flash-high" -> "3.8", "gpt-oss-120b-medium" -> "120b").
-function versionOf(id: string): string | undefined {
-  return (
-    id
-      .toLowerCase()
-      .split("-")
-      .find((token) => /^\d/.test(token))
-  );
-}
-
-function versionRank(version: string | undefined): number {
-  if (version === undefined) return 0;
-  const match = /^(\d+(?:\.\d+)*)(.*)$/.exec(version);
-  if (!match) return 0;
-  let rank = 0;
-  for (const part of match[1].split(".")) rank = rank * 1000 + Number(part);
-  return rank; // [3,8] -> 3008 > [3,7] -> 3007; [120] -> 120 > [20] -> 20
-}
-
-const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
-
-// Derived alias clusters: ids sharing a stem once the version token is
-// dropped, e.g. gemini-3.8-flash-high -> gemini-flash, gpt-oss-120b-medium ->
-// gpt-oss. Latest version wins; effort resolution matches the request's
-// effort exactly, then falls to the nearest rank, preferring the
-// higher-intensity side (so gemini-pro + medium lands on high, matching
-// agy's own high>low tie-break on a 2-suffix catalog).
-export type AliasCluster = {
-  name: string;
-  members: Array<{ id: string; version: string | undefined; effort?: string }>;
-};
-
+// Aliases derive from the same shared machinery as pi's (util.ts) — version
+// slot stripped from the stem, effort from the tail — but agy additionally
+// RESOLVES to a concrete catalog id (see resolveModelAgainstCatalog), since
+// agy offers no fuzzy matcher of its own.
 const aliasMemo = new WeakMap<AgyModelEntry[], AliasCluster[]>();
 
 export function deriveAliases(entries: AgyModelEntry[]): AliasCluster[] {
   const memoed = aliasMemo.get(entries);
   if (memoed) return memoed;
-  const clusters = new Map<string, AliasCluster>();
-  for (const entry of entries) {
-    const tokens = entry.id.toLowerCase().split("-");
-    const version = versionOf(entry.id);
-    // Effort is recognized as the trailing token of a versioned id only —
-    // an id without a version segment keeps its full string as the stem
-    // (its last token would otherwise alias-strip a meaningful word).
-    const last = tokens[tokens.length - 1] ?? "";
-    const effort = version !== undefined && last in EFFORT_RANK ? last : undefined;
-    const stemTokens = version !== undefined ? tokens.filter((token) => token !== version && token !== effort) : tokens;
-    const stem = stemTokens.join("-");
-    const cluster = clusters.get(stem) ?? { name: stem, members: [] };
-    cluster.members.push({ id: entry.id, version, effort });
-    clusters.set(stem, cluster);
-  }
-  const derived = [...clusters.values()];
+  const derived = deriveAliasClusters(entries.map((entry) => entry.id));
   aliasMemo.set(entries, derived);
   return derived;
-}
-
-export function resolveAlias(cluster: AliasCluster, effort: string): string {
-  // Latest version wins (3.8 over 3.7 over 3.1); undefined versions rank 0.
-  const latest = cluster.members.reduce((best, member) =>
-    versionRank(member.version) > versionRank(best.version) ? member : best
-  );
-  const latestMembers = cluster.members.filter(
-    (member) => versionRank(member.version) === versionRank(latest.version)
-  );
-  const ranked = latestMembers
-    .filter((member) => member.effort !== undefined)
-    .map((member) => ({ ...member, rank: EFFORT_RANK[member.effort as string] }));
-  if (!ranked.length) return latest.id; // effort-less cluster: bare latest id
-  const requested = EFFORT_RANK[effort.toLowerCase()];
-  if (requested === undefined) return ranked[0].id;
-  const exact = ranked.find((member) => member.rank === requested);
-  if (exact) return exact.id;
-  // Nearest effort rank; on an equal distance, prefer the higher side.
-  const closer = (member: (typeof ranked)[number], best: (typeof ranked)[number]) =>
-    Math.abs(member.rank - requested) < Math.abs(best.rank - requested) ||
-    (Math.abs(member.rank - requested) === Math.abs(best.rank - requested) &&
-      member.rank > best.rank);
-  return ranked.reduce((best, member) => (closer(member, best) ? member : best)).id;
 }
 
 // Single resolution path shared by buildArgs and ownsModel: a literal catalog
