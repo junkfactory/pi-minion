@@ -636,6 +636,37 @@ describe("modal", () => {
 
     assert.ok(component.render(60).every((l) => !l.includes("finished")));
   });
+
+  it("re-arms tail-following once scrolled back to the bottom", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.openModal("modalJob", { title: "Modal Job", model: "opus", prompt: "",
+      text: Array.from({ length: 6 }, (_, i) => `row${i}`).join("\n") });
+
+    const component = state.customFactory!(fakeTui(12), fakeTheme(), {}, () => {}) as {
+      render(width: number): string[];
+      handleInput(data: string): void;
+    };
+    // fakeTui(12) -> 8 modal rows - 6 chrome = 2 body rows; following the tail.
+    const body = () => component.render(60).slice(3, 5).join("\n");
+    assert.match(body(), /row4[\s\S]*row5/);
+
+    component.handleInput("\x1b[A"); // up: disarm tail-following
+    assert.match(body(), /row3[\s\S]*row4/);
+
+    jobUI.appendModalText("modalJob", "more text that adds lines");
+    const afterAppend = body();
+    assert.match(afterAppend, /row3[\s\S]*row4/, "scroll offset should be preserved, not pinned to the tail");
+    assert.doesNotMatch(afterAppend, /more text/, "the appended tail must stay off-screen while following is disarmed");
+
+    component.handleInput("\x1b[1;2B"); // shift+down: back to the bottom, re-arming
+    assert.match(body(), /row5/);
+
+    jobUI.appendModalText("modalJob", "\neven more lines arrive");
+    const afterSecondAppend = body();
+    assert.match(afterSecondAppend, /even more lines arrive/, "should follow the tail again after re-arming");
+    assert.doesNotMatch(afterSecondAppend, /row3/);
+  });
 });
 
 describe("workflow confirm overlay", () => {

@@ -43,12 +43,19 @@ import {
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
-  type Component,
   type TUI
 } from "@earendil-works/pi-tui";
 import type { TokenCounts } from "./adapters/types.js";
 import { truncate } from "./adapters/util.js";
 import { glyph } from "./glyphs.js";
+import {
+  headerRow,
+  jobDetailScrollKeys,
+  ModalShell,
+  openModal as mountModal,
+  Viewport,
+  type FrameSpec
+} from "./modal-shell.js";
 
 export type JobStatusUpdate = {
   title: string;
@@ -179,11 +186,6 @@ const DEFAULT_WIDGET_KEY = "pi-minion-jobs";
 const DEFAULT_MAX_WIDGET_LINES = 12;
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
-// Must match overlayOptions.maxHeight below — duplicated here because render(width)
-// isn't told the resolved height, only width; see modal-sizing note on openModal().
-const MODAL_HEIGHT_RATIO = 0.7;
-// Top border + header + header divider + footer divider + footer + bottom border.
-const MODAL_CHROME_LINES = 6;
 const MODAL_FOOTER_HINT = "↑↓ scroll · ⇧↑↓ page · Esc close";
 const MODAL_TOOL_ARGS_SNIPPET_LENGTH = 80;
 const MODAL_TOOL_OUTPUT_SNIPPET_LENGTH = 160;
@@ -214,8 +216,6 @@ export type ModalState = {
   prompt: string;
   blocks: ModalBlock[];
   finished: boolean;
-  scrollOffset: number;
-  autoScroll: boolean;
   requestRender: () => void;
 };
 
@@ -383,123 +383,51 @@ function formatWidgetLines(
 }
 
 // The bordered box shared by the detail modal and the workflow confirm
-// dialog: each row is truncated to the inner width; null draws a ├─┤ divider.
-export function frameLines(border: (text: string) => string, width: number, rows: Array<string | null>): string[] {
-  const innerWidth = Math.max(4, width - 4);
-  const rule = (left: string, right: string) => border(`${left}${"─".repeat(width - 2)}${right}`);
-  return [
-    rule("╭", "╮"),
-    ...rows.map((content) =>
-      content === null
-        ? rule("├", "┤")
-        : `${border("│")} ${truncateToWidth(content, innerWidth, "…", true)} ${border("│")}`
-    ),
-    rule("╰", "╯")
-  ];
-}
+// dialog. Moved to modal-shell.ts (Step 1 of the reusable-modal-helper plan)
+// so the shell can own framing without an agent.ui ↔ shell import cycle.
 
-export class JobDetailModal implements Component {
-  // Visible body height from the last render(); the shift+up/down page size.
-  private pageRows = 1;
+/**
+ * FrameSpec for the job-detail modal: the accent border (uniform chrome
+ * across all modals), a bold accent title with model/thinking/finished
+ * badges, prompt + muted rule + streamed blocks as the body, and the
+ * scroll-hint footer. Scroll/follow-tail state is owned by the mounting
+ * shell's Viewport, driven by jobDetailScrollKeys.
+ */
+export function jobDetailSpec(state: ModalState): FrameSpec {
+  // Resolved level, not the main session's — an unset effort falls back to
+  // "off", the same convention core Pi uses for "no thinking level chosen".
+  // Resolved once per spec so the badge costs one getThinkingBorderColor
+  // call per render.
+  let borderColor: ((text: string) => string) | undefined;
+  const thinkingBorder = (theme: Theme) =>
+    (borderColor ??= theme.getThinkingBorderColor(
+      (state.effort ?? "off") as Parameters<Theme["getThinkingBorderColor"]>[0]
+    ));
 
-  constructor(
-    private readonly ctx: ExtensionContext,
-    private readonly tui: TUI,
-    private readonly state: ModalState,
-    private readonly done: (result: undefined) => void,
-    private readonly onDispose: () => void
-  ) {}
-
-  invalidate(): void {
-    // No cached rendering state to invalidate — render() always reads live state.
-  }
-
-  render(width: number): string[] {
-    const theme = this.ctx.ui.theme;
-    // Resolved level, not the main session's — an unset effort falls back to
-    // "off", the same convention core Pi uses for "no thinking level chosen".
-    const borderColor = theme.getThinkingBorderColor(
-      (this.state.effort ?? "off") as Parameters<Theme["getThinkingBorderColor"]>[0]
-    );
-    const innerWidth = Math.max(4, width - 4);
-    const rows = Math.max(1, Math.floor(this.tui.terminal.rows * MODAL_HEIGHT_RATIO));
-    const bodyRows = Math.max(0, rows - MODAL_CHROME_LINES);
-    this.pageRows = Math.max(1, bodyRows);
-
-    const separator = theme.fg("borderMuted", "─".repeat(innerWidth));
-    const body = this.state.blocks.length
-      ? this.state.blocks.map((block) => renderModalBlock(theme, block)).join("\n\n")
-      : "Working…";
-    const fullText = `${this.state.prompt}\n\n${separator}\n\n${body}`;
-    const contentLines = wrapTextWithAnsi(fullText, innerWidth);
-    const maxScroll = Math.max(0, contentLines.length - bodyRows);
-    if (this.state.autoScroll) {
-      this.state.scrollOffset = maxScroll;
-    } else {
-      this.state.scrollOffset = Math.min(this.state.scrollOffset, maxScroll);
-      if (this.state.scrollOffset >= maxScroll) this.state.autoScroll = true;
-    }
-    const visible = contentLines.slice(
-      this.state.scrollOffset,
-      this.state.scrollOffset + bodyRows
-    );
-    while (visible.length < bodyRows) visible.push("");
-
-    // Left: job title, bold and accented. Right: model, then the resolved
-    // thinking level in the same color as the border (so the badge and the
-    // box outline visually agree), then a finished marker once done.
-    const titlePart = theme.bold(theme.fg("accent", this.state.title));
-    const dot = theme.fg("syntaxComment", " · ");
-    const badges = [theme.fg("syntaxComment", this.state.model), borderColor(`thinking: ${this.state.effort ?? "off"}`)];
-    if (this.state.finished) badges.push(theme.fg("syntaxComment", "finished"));
-    const metaPart = badges.join(dot);
-    const gap = Math.max(1, innerWidth - visibleWidth(titlePart) - visibleWidth(metaPart));
-    const header = `${titlePart}${" ".repeat(gap)}${metaPart}`;
-
-    return frameLines(borderColor, width, [
-      header,
-      null,
-      ...visible,
-      null,
-      theme.fg("syntaxComment", MODAL_FOOTER_HINT)
-    ]);
-  }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, "shift+up")) {
-      this.state.autoScroll = false;
-      this.state.scrollOffset = Math.max(0, this.state.scrollOffset - this.pageRows);
-      this.state.requestRender();
-      return;
-    }
-    if (matchesKey(data, "shift+down")) {
-      this.state.scrollOffset += this.pageRows;
-      this.state.requestRender();
-      return;
-    }
-    if (matchesKey(data, "up")) {
-      this.state.autoScroll = false;
-      this.state.scrollOffset = Math.max(0, this.state.scrollOffset - 1);
-      this.state.requestRender();
-      return;
-    }
-    if (matchesKey(data, "down")) {
-      this.state.scrollOffset += 1;
-      this.state.requestRender();
-      return;
-    }
-    if (
-      matchesKey(data, "escape") ||
-      matchesKey(data, "ctrl+c") ||
-      matchesKey(data, "q")
-    ) {
-      this.done(undefined);
-    }
-  }
-
-  dispose(): void {
-    this.onDispose();
-  }
+  return {
+    // Uniform chrome: every modal frames in the accent color.
+    border: (theme) => (text) => theme.fg("accent", text),
+    titleRows: ({ theme, innerWidth }) => {
+      const color = thinkingBorder(theme);
+      // Left: job title, bold and accented. Right: model, then the resolved
+      // thinking level in the same color as the border (so the badge and the
+      // box outline visually agree), then a finished marker once done.
+      const titlePart = theme.bold(theme.fg("accent", state.title));
+      const dot = theme.fg("syntaxComment", " · ");
+      const badges = [theme.fg("syntaxComment", state.model), color(`thinking: ${state.effort ?? "off"}`)];
+      if (state.finished) badges.push(theme.fg("syntaxComment", "finished"));
+      return [headerRow(theme, titlePart, badges.join(dot), innerWidth), null];
+    },
+    body: ({ theme, innerWidth }) => {
+      const separator = theme.fg("borderMuted", "─".repeat(innerWidth));
+      const blocks = state.blocks.length
+        ? state.blocks.map((block) => renderModalBlock(theme, block)).join("\n\n")
+        : "Working…";
+      return { text: `${state.prompt}\n\n${separator}\n\n${blocks}` };
+    },
+    footerRows: ({ theme }) => [null, theme.fg("muted", MODAL_FOOTER_HINT)],
+    fillBody: true
+  };
 }
 
 // One styled run inside a confirm line: plain, muted, or colored with an
@@ -550,121 +478,9 @@ export function renderWorkflowConfirmBody(theme: Theme, confirm: WorkflowConfirm
 }
 
 const CONFIRM_OPTIONS = ["Yes", "No"] as const;
-const CONFIRM_HEIGHT_RATIO = 0.9;
-// Top border, title rule, blank, two options, blank, hint, bottom border.
-const CONFIRM_CHROME_LINES = 8;
-// Rows reserved for the "↑ N more" / "↓ N more" lines while the body overflows.
-const CONFIRM_INDICATOR_LINES = 2;
 
 // The user's answer; `message` is the optional reason typed on "No".
 export type WorkflowConfirmResult = { approved: boolean; message?: string };
-
-// Yes/No overlay mirroring pi's extension selector, minus its all-accent body.
-class WorkflowConfirmDialog implements Component {
-  // Starts on "No": a stray enter must not spend money.
-  private selected = CONFIRM_OPTIONS.indexOf("No");
-  // Shown inline on "No" while it is selected; typing goes here.
-  private readonly reason: Input;
-  // Body scroll state; maxScroll and pageRows are refreshed by every render().
-  private scrollOffset = 0;
-  private maxScroll = 0;
-  private pageRows = 1;
-
-  constructor(
-    private readonly theme: Theme,
-    private readonly tui: TUI,
-    private readonly confirm: WorkflowConfirm,
-    private readonly done: (result: WorkflowConfirmResult) => void
-  ) {
-    this.reason = new Input({
-      prompt: "reason: ",
-      placeholder: "tell the agent why…",
-      placeholderStyle: (text) => theme.fg("muted", text)
-    });
-    this.reason.focused = true;
-  }
-
-  private onNo(): boolean {
-    return CONFIRM_OPTIONS[this.selected] === "No";
-  }
-
-  invalidate(): void {}
-
-  render(width: number): string[] {
-    const theme = this.theme;
-    const border = (text: string) => theme.fg("border", text);
-    const innerWidth = Math.max(4, width - 4);
-    const title = renderWorkflowConfirmTitle(theme, this.confirm.title, innerWidth);
-    const all = renderWorkflowConfirmLines(theme, this.confirm.lines, innerWidth);
-    const room = Math.max(
-      1,
-      Math.floor(this.tui.terminal.rows * CONFIRM_HEIGHT_RATIO) - CONFIRM_CHROME_LINES - title.length
-    );
-    const overflow = all.length > room;
-    const bodyRows = overflow ? Math.max(1, room - CONFIRM_INDICATOR_LINES) : room;
-    this.pageRows = bodyRows;
-    this.maxScroll = Math.max(0, all.length - bodyRows);
-    this.scrollOffset = Math.min(this.scrollOffset, this.maxScroll);
-    const hidden = (n: number, arrow: string) => (n > 0 ? theme.fg("muted", `${arrow} ${n} more`) : "");
-    const body = overflow
-      ? [
-          hidden(this.scrollOffset, "↑"),
-          ...all.slice(this.scrollOffset, this.scrollOffset + bodyRows),
-          hidden(all.length - this.scrollOffset - bodyRows, "↓")
-        ]
-      : all;
-    const options = CONFIRM_OPTIONS.map((option, i) => {
-      if (i !== this.selected) return `  ${theme.fg("text", option)}`;
-      if (option !== "No") return theme.fg("accent", `→ ${option}`);
-      const head = `→ ${option} · `;
-      const reason = this.reason.render(Math.max(1, innerWidth - visibleWidth(head)))[0];
-      return theme.fg("accent", `→ ${option}`) + theme.fg("muted", " · ") + reason;
-    });
-    return frameLines(border, width, [
-      ...title,
-      null,
-      ...body,
-      "",
-      ...options,
-      "",
-      theme.fg(
-        "muted",
-        `↑↓ navigate  ${overflow ? "shift+↑↓ scroll  " : ""}type a reason on No  enter select  esc cancel`
-      )
-    ]);
-  }
-
-  private scrollBy(delta: number): void {
-    this.scrollOffset = Math.min(this.maxScroll, Math.max(0, this.scrollOffset + delta));
-    this.tui.requestRender();
-  }
-
-  handleInput(data: string): void {
-    // Same paging as JobDetailModal (shift+↑/↓); ↑/↓ belong to Yes/No here.
-    if (matchesKey(data, "shift+up") || matchesKey(data, "pageUp")) return this.scrollBy(-this.pageRows);
-    if (matchesKey(data, "shift+down") || matchesKey(data, "pageDown")) return this.scrollBy(this.pageRows);
-    // On "No", j/k are text for the reason, not navigation.
-    const vim = !this.onNo();
-    if (matchesKey(data, "up") || (vim && data === "k")) {
-      this.selected = Math.max(0, this.selected - 1);
-    } else if (matchesKey(data, "down") || (vim && data === "j")) {
-      this.selected = Math.min(CONFIRM_OPTIONS.length - 1, this.selected + 1);
-    } else if (matchesKey(data, "enter") || data === "\n") {
-      if (!this.onNo()) return this.done({ approved: true });
-      const message = this.reason.getValue().trim();
-      this.done(message ? { approved: false, message } : { approved: false });
-      return;
-    } else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-      this.done({ approved: false });
-      return;
-    } else if (this.onNo()) {
-      this.reason.handleInput(data);
-    } else {
-      return;
-    }
-    this.tui.requestRender();
-  }
-}
 
 /**
  * Yes/No approval overlay for a workflow plan. Approves only on "Yes"; "No"
@@ -675,16 +491,120 @@ export async function confirmWorkflow(
   ctx: ExtensionContext,
   confirm: WorkflowConfirm
 ): Promise<WorkflowConfirmResult> {
-  try {
-    const result = await ctx.ui.custom<WorkflowConfirmResult>(
-      (tui, _theme, _keybindings, done) => new WorkflowConfirmDialog(ctx.ui.theme, tui, confirm, done),
-      { overlay: true, overlayOptions: { anchor: "center", width: "80%", maxHeight: "90%" } }
-    );
-    if (result?.approved === true) return { approved: true };
-    return result?.message ? { approved: false, message: result.message } : { approved: false };
-  } catch {
-    return { approved: false };
-  }
+  // Starts on "No": a stray enter must not spend money. The reason input is
+  // shown inline on "No" while it is selected; typing goes here.
+  let selected = CONFIRM_OPTIONS.indexOf("No");
+  const reason = new Input({
+    prompt: "reason: ",
+    placeholder: "tell the agent why…",
+    placeholderStyle: (text) => ctx.ui.theme.fg("muted", text)
+  });
+  reason.focused = true;
+  const onNo = () => CONFIRM_OPTIONS[selected] === "No";
+
+  const result = await mountModal<WorkflowConfirmResult>(ctx, {
+    fallback: { approved: false },
+    heightRatio: 0.9,
+    width: "80%",
+    make: (tui, done) => {
+      const viewport = new Viewport();
+      const optionRows = (theme: Theme, innerWidth: number): string[] =>
+        CONFIRM_OPTIONS.map((option, i) => {
+          if (i !== selected) return `  ${theme.fg("text", option)}`;
+          if (option !== "No") return theme.fg("accent", `→ ${option}`);
+          const head = `→ ${option} · `;
+          const reasonLine = reason.render(Math.max(1, innerWidth - visibleWidth(head)))[0];
+          return theme.fg("accent", `→ ${option}`) + theme.fg("muted", " · ") + reasonLine;
+        });
+      // renderFrame derives the same room from 2 borders + titleRows
+      // (title + divider) + 5 footer rows; recomputing it here keeps the
+      // footer's overflow hint in step with the indicator rows.
+      const overflow = (theme: Theme, innerWidth: number): boolean =>
+        renderWorkflowConfirmLines(theme, confirm.lines, innerWidth).length >
+        Math.max(
+          1,
+          Math.floor(tui.terminal.rows * 0.9) -
+            8 -
+            renderWorkflowConfirmTitle(theme, confirm.title, innerWidth).length
+        );
+
+      const spec: FrameSpec = {
+        // Uniform chrome: accent border, like every other modal.
+        border: (theme) => (text) => theme.fg("accent", text),
+        titleRows: ({ theme, innerWidth }) => [
+          ...renderWorkflowConfirmTitle(theme, confirm.title, innerWidth),
+          null
+        ],
+        body: ({ theme, innerWidth }) => ({
+          rows: renderWorkflowConfirmLines(theme, confirm.lines, innerWidth)
+        }),
+        footerRows: ({ theme, innerWidth }) => [
+          // Leading null: the footer-bar rule, same as JobDetail/trail.
+          null,
+          ...optionRows(theme, innerWidth),
+          "",
+          theme.fg(
+            "muted",
+            `↑↓ navigate  ${overflow(theme, innerWidth) ? "shift+↑↓ scroll  " : ""}type a reason on No  enter select  esc cancel`
+          )
+        ],
+        // Must match mountModal's heightRatio below: renderFrame sizes the
+        // body from this, and the footer's overflow() uses the same 0.9.
+        heightRatio: 0.9,
+        indicators: true
+      };
+
+      return new ModalShell<WorkflowConfirmResult>({
+        theme: ctx.ui.theme,
+        tui,
+        done: (r) => done(r ?? { approved: false }),
+        spec,
+        viewport: () => viewport,
+        // Ports the old dialog's handleInput; every key is claimed so
+        // ModalShell's scroll/esc defaults never run.
+        input: (data, api) => {
+          // Same paging as the detail modal (shift+↑/↓); ↑/↓ belong to Yes/No here.
+          if (matchesKey(data, "shift+up") || matchesKey(data, "pageUp")) {
+            api.viewport.pageBy(-1, api.viewport.bodyRows, api.viewport.total);
+            api.requestRender();
+            return true;
+          }
+          if (matchesKey(data, "shift+down") || matchesKey(data, "pageDown")) {
+            api.viewport.pageBy(1, api.viewport.bodyRows, api.viewport.total);
+            api.requestRender();
+            return true;
+          }
+          // On "No", j/k are text for the reason, not navigation.
+          const vim = !onNo();
+          if (matchesKey(data, "up") || (vim && data === "k")) {
+            selected = Math.max(0, selected - 1);
+          } else if (matchesKey(data, "down") || (vim && data === "j")) {
+            selected = Math.min(CONFIRM_OPTIONS.length - 1, selected + 1);
+          } else if (matchesKey(data, "enter") || data === "\n") {
+            if (!onNo()) {
+              done({ approved: true });
+              return true;
+            }
+            const message = reason.getValue().trim();
+            done(message ? { approved: false, message } : { approved: false });
+            return true;
+          } else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+            done({ approved: false });
+            return true;
+          } else if (onNo()) {
+            reason.handleInput(data);
+          } else {
+            return true;
+          }
+          api.requestRender();
+          return true;
+        }
+      });
+    }
+  });
+
+  if (result?.approved === true) return { approved: true };
+  return result?.message ? { approved: false, message: result.message } : { approved: false };
 }
 
 /**
@@ -873,33 +793,35 @@ export function createJobUI(
       prompt: initial.prompt,
       blocks: initial.text ? [{ type: "text", text: initial.text }] : [],
       finished: initial.finished ?? false,
-      scrollOffset: 0,
-      autoScroll: true,
       requestRender: () => {}
     };
     activeModal = state;
-    const opened = safeUi(() =>
-      ctx.ui.custom<undefined>(
-        (tui, _theme, _keybindings, done) => {
-          state.requestRender = () => tui.requestRender();
-          return new JobDetailModal(ctx, tui, state, done, () => {
-            if (activeModal === state) activeModal = undefined;
-          });
-        },
-        {
-          overlay: true,
-          overlayOptions: { anchor: "center", width: "80%", maxHeight: "70%" }
-        }
-      )
-    );
-    return (opened ?? Promise.resolve()).then(
-      () => {
+    return mountModal(ctx, {
+      fallback: undefined,
+      heightRatio: 0.7,
+      finally: () => {
         if (activeModal === state) activeModal = undefined;
       },
-      () => {
-        if (activeModal === state) activeModal = undefined;
+      make: (tui, done) => {
+        state.requestRender = () => tui.requestRender();
+        const viewport = new Viewport();
+        const shell = new ModalShell<undefined>({
+          theme: ctx.ui.theme,
+          tui,
+          done,
+          spec: jobDetailSpec(state),
+          viewport: () => viewport,
+          input: jobDetailScrollKeys
+        });
+        // dispose() clears the active-modal reference as the detail modal's
+        // dispose did; mountModal's finally covers promise settle (resolve and reject).
+        return Object.assign(shell, {
+          dispose: () => {
+            if (activeModal === state) activeModal = undefined;
+          }
+        });
       }
-    );
+    });
   }
 
   function appendModalText(id: string, text: string): void {

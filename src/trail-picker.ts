@@ -1,10 +1,16 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import {
-  frameLines,
-  JobDetailModal,
+  headerRow,
+  jobDetailScrollKeys,
+  renderFrame,
+  Viewport,
+  type FrameSpec
+} from "./modal-shell.js";
+import {
+  jobDetailSpec,
   type JobUI,
   type ModalState
 } from "./agent.ui.js";
@@ -127,7 +133,7 @@ export function trailSentinelLabel(count: number): string {
 //
 // One persistent custom overlay with three views (list / steps / detail).
 // The list view shows the two completed-sections; the steps view shows a
-// finished workflow's steps; the detail view reuses JobDetailModal for a
+// finished workflow's steps; the detail view renders jobDetailSpec for a
 // chosen job's replay. Esc walks up one view; at the list level it resolves
 // the browser promise so openPiMinionsPicker re-presents the top picker.
 
@@ -151,17 +157,16 @@ class TrailBrowser implements Component {
   // where it was, not reset.
   private listCursor = 0;
   private stepsCursor = 0;
-  // Viewport scroll offsets — advanced when the cursor moves past the
-  // visible window so the cursor stays in view; clamped to
-  // [0, max(0, totalRows - bodyRows)]. The browser keeps its own
-  // per-view scroll because pi's overlay crops render(width) output to
-  // maxHeight: the browser has to render only its visible window.
-  private listScrollOffset = 0;
-  private stepsScrollOffset = 0;
+  // One viewport per view (list / steps / detail); renderFrame owns the
+  // window sizing and keeps the cursor row visible inside it. Pi's overlay
+  // crops render(width) output to maxHeight, so the frame renders only its
+  // visible window.
+  private readonly listViewport = new Viewport();
+  private readonly stepsViewport = new Viewport();
+  private readonly detailViewport = new Viewport();
   private stepsWorkflow: MinionWorkflow | undefined;
-  // Detail view's modal + state; setActiveDetail is wired so stream
-  // mutators route into this state for the duration of the detail view.
-  private detailModal: JobDetailModal | undefined;
+  // Detail view's state; setActiveDetail is wired so stream mutators route
+  // into this state for the duration of the detail view.
   private detailState: ModalState | undefined;
   private tui: TUI | undefined;
   private requestRenderFn: () => void = () => {};
@@ -187,18 +192,21 @@ class TrailBrowser implements Component {
   }
 
   dispose(): void {
-    // Same teardown the detail-modal's done callback performs: clear
-    // active-modal routing and drop the modal reference so a stale
-    // handleInput can't reach a closed view.
+    // Clear active-modal routing and drop the state so a stale handleInput
+    // can't reach a closed view.
     if (this.view === "detail") this.clearActiveDetail();
   }
 
   render(width: number): string[] {
-    if (this.view === "detail" && this.detailModal) {
-      // The detail view's frame IS the JobDetailModal's frame — both the
-      // v1 detail-modal layout and the browser are the same single
-      // overlay, so nesting would only double-frame.
-      return this.detailModal.render(width);
+    if (this.view === "detail" && this.detailState) {
+      // The detail view and the browser are the same single overlay, so
+      // jobDetailSpec's frame IS the browser's frame — no nesting.
+      return renderFrame(jobDetailSpec(this.detailState), {
+        theme: this.ctx.ui.theme,
+        tui: this.tui!,
+        viewport: this.detailViewport,
+        width
+      });
     }
     if (this.view === "steps") {
       return this.renderStepsFrame(width);
@@ -207,9 +215,15 @@ class TrailBrowser implements Component {
   }
 
   handleInput(data: string): void {
-    if (this.view === "detail" && this.detailModal) {
-      this.detailModal.handleInput(data);
-      return;
+    if (this.view === "detail" && this.detailState) {
+      // esc/ctrl+c/q exit detail through api.done, matching the old
+      // detail-modal done contract; unclaimed keys fall through.
+      const api = {
+        viewport: this.detailViewport,
+        requestRender: this.requestRenderFn,
+        done: () => this.exitDetail()
+      };
+      if (jobDetailScrollKeys(data, api)) return;
     }
     if (matchesKey(data, "up")) {
       if (this.view === "steps") this.moveStepsCursor(-1);
@@ -237,14 +251,6 @@ class TrailBrowser implements Component {
     const total = this.stepsWorkflow.steps.filter((step) => step.jobId !== undefined).length;
     if (total === 0) return;
     this.stepsCursor = clamp(this.stepsCursor + delta, 0, total - 1);
-    // Keep the cursor in the visible window. bodyRows is bounded by the
-    // same helper the renderer uses, so the viewport is consistent with
-    // what the user sees.
-    this.stepsScrollOffset = this.scrollToShow(
-      this.stepsRowIndex(),
-      this.stepsScrollOffset,
-      this.buildStepsRows().length
-    );
   }
 
   // Section-aware: -1 at the top of the first section wraps to the bottom
@@ -255,11 +261,6 @@ class TrailBrowser implements Component {
     const total = jobs.length + workflows.length;
     if (total === 0) return;
     this.listCursor = (this.listCursor + delta + total) % total;
-    this.listScrollOffset = this.scrollToShow(
-      this.listRowIndex(),
-      this.listScrollOffset,
-      this.buildListRows().length
-    );
   }
 
   private async activate(): Promise<void> {
@@ -326,9 +327,8 @@ class TrailBrowser implements Component {
   // stdout.json otherwise, then finishModalJob only for terminal metas. The
   // detail view is inline within the browser — the ModalState is registered
   // via setActiveDetail so applyModalEvent stream mutators still route to
-  // it (the v1 contract). detailModal owns the framed rendering and
-  // input/key handling; the browser only orchestrates the view transition
-  // when its done callback fires.
+  // it (the v1 contract). The browser renders jobDetailSpec over that state
+  // and routes input through jobDetailScrollKeys.
   private async openDetailForJob(meta: { id: string } & JobMetaEntry): Promise<void> {
     const finished = meta.status !== "running";
     let pruned = false;
@@ -353,8 +353,6 @@ class TrailBrowser implements Component {
       prompt: meta.prompt,
       blocks: pruned && text ? [{ type: "text", text }] : [],
       finished,
-      scrollOffset: 0,
-      autoScroll: true,
       requestRender: this.requestRenderFn
     };
     this.detailState = state;
@@ -363,17 +361,6 @@ class TrailBrowser implements Component {
       await backfillModal(jobDir!, resolveAdapterForJob(meta.model), this.jobUI, meta.id);
       if (finished) this.jobUI.finishModalJob(meta.id);
     }
-    this.detailModal = new JobDetailModal(
-      this.ctx,
-      // JobDetailModal reads tui.terminal.rows for its body sizing — the
-      // browser's tui is the only tui this overlay ever knows about.
-      this.tui!,
-      state,
-      () => this.exitDetail(),
-      () => {
-        if (this.detailState === state) this.clearActiveDetail();
-      }
-    );
     this.previousView = this.view;
     this.view = "detail";
   }
@@ -385,11 +372,9 @@ class TrailBrowser implements Component {
   }
 
   private clearActiveDetail(): void {
-    if (this.detailModal) {
-      this.detailModal = undefined;
-      this.detailState = undefined;
-      this.jobUI.setActiveDetail(undefined);
-    }
+    if (!this.detailState) return;
+    this.detailState = undefined;
+    this.jobUI.setActiveDetail(undefined);
   }
 
   private exitOneLevel(): void {
@@ -409,158 +394,109 @@ class TrailBrowser implements Component {
 
   // === Rendering =====================================================
 
-  // Box target height, in total lines (including frameLines' 2 border
-  // rows). Matches overlayOptions.maxHeight ("70%") the same way
-  // JobDetailModal's MODAL_HEIGHT_RATIO does, so the browser's box fills
-  // the same screen real estate as the detail modal. Headless/test paths
-  // where the tui handle is absent or rows is bogus fall back to a
-  // sensible minimum so short content still renders without crashing.
-  private targetBoxRows(): number {
-    const tuiRows = this.tui?.terminal.rows;
-    if (typeof tuiRows !== "number" || !Number.isFinite(tuiRows) || tuiRows <= 0) {
-      return 14;
-    }
-    return Math.max(1, Math.floor(tuiRows * 0.7));
+  // List view: bold accent title + trailing rule; the two completed
+  // sections (with muted in-content rules); cursor kept visible inside the
+  // body window. No fill/indicator rows.
+  private listSpec(): FrameSpec {
+    return {
+      border: (theme) => (text) => theme.fg("accent", text),
+      titleRows: ({ theme }) => [theme.bold(theme.fg("accent", "Completed trails")), null],
+      body: ({ theme, innerWidth }) => ({
+        rows: this.listBodyRows(theme, innerWidth),
+        cursorRow: this.listRowIndex()
+      }),
+      footerRows: ({ theme }) => [null, theme.fg("muted", "↑↓ navigate  Enter open  Esc/q exit")]
+    };
   }
 
-  // Body rows available inside the framed box (targetBoxRows minus top
-  // and bottom border rows). Used as the viewport size when content
-  // overflows.
-  private targetBodyRows(): number {
-    return Math.max(1, this.targetBoxRows() - 2);
-  }
-
-  // Compute a scroll offset that keeps `rowIndex` in the visible body
-  // window. Returns a value in [0, max(0, totalRows - bodyRows)].
-  private scrollToShow(rowIndex: number, scrollOffset: number, totalRows: number): number {
-    const bodyRows = this.targetBodyRows();
-    const maxScroll = Math.max(0, totalRows - bodyRows);
-    const clamped = Math.max(0, Math.min(scrollOffset, maxScroll));
-    if (rowIndex < clamped) return rowIndex;
-    if (rowIndex >= clamped + bodyRows) return rowIndex - bodyRows + 1;
-    return clamped;
-  }
-
-  // Window of rows to actually render, given the current scroll offset.
-  // Auto-sizes: when content fits inside the body window the box shrinks
-  // to its natural height; when it overflows, the window is exactly
-  // bodyRows tall (a stable size while scrolling). null dividers are
-  // preserved so they render as ├──┤ rules in frameLines — never coerce
-  // them to "".
-  private windowedRows(scrollOffset: number, totalRows: number, source: Array<string | null>): Array<string | null> {
-    const bodyRows = this.targetBodyRows();
-    const start = Math.max(0, Math.min(scrollOffset, Math.max(0, totalRows - bodyRows)));
-    return source.slice(start, start + bodyRows);
-  }
-
-  // Builds the full list-view rows once so both the renderer and the
-  // cursor-index helper see the same layout. Returns an array indexed
-  // by display row position; null = title-bar and footer-bar rules
-  // (rendered as full-strength ├──┤ by frameLines), string = content
-  // row — section dividers use mutedRule() so only the title/footer
-  // chrome keeps the accent border.
-  private buildListRows(): Array<string | null> {
-    const theme = this.ctx.ui.theme;
-    const innerWidth = Math.max(4, this.lastRenderWidth - 4);
+  // Body rows of the list view, without title/footer chrome. null = ambient
+  // separators (frameLines draws ├──┤); section dividers use mutedRule() so
+  // only the title/footer chrome keeps the accent border.
+  private listBodyRows(theme: Theme, innerWidth: number): Array<string | null> {
     const { jobs, workflows } = this.lists;
-    const rows: Array<string | null> = [
-      theme.bold(theme.fg("accent", "Completed trails")),
-      null
-    ];
+    const rows: Array<string | null> = [];
     if (jobs.length === 0 && workflows.length === 0) {
       rows.push(theme.fg("muted", "No finished jobs or workflows yet."));
-    } else {
-      rows.push(this.renderSectionHeader(theme, "Completed jobs", innerWidth));
-      if (jobs.length === 0) {
-        rows.push(theme.fg("muted", "  (none)"));
-      } else {
-        jobs.forEach((row, index) => {
-          rows.push(this.renderListRow(theme, row, index === this.listCursor, innerWidth));
-        });
-      }
-      rows.push(this.mutedRule(innerWidth));
-      rows.push(this.renderSectionHeader(theme, "Completed workflows", innerWidth));
-      if (workflows.length === 0) {
-        rows.push(theme.fg("muted", "  (none)"));
-      } else {
-        workflows.forEach((row, index) => {
-          const cursor = jobs.length + index;
-          rows.push(this.renderListRow(theme, row, cursor === this.listCursor, innerWidth));
-        });
-      }
+      return rows;
     }
-    rows.push(null);
-    rows.push(theme.fg("muted", "↑↓ navigate  Enter open  Esc/q exit"));
+    rows.push(this.renderSectionHeader(theme, "Completed jobs", innerWidth));
+    if (jobs.length === 0) {
+      rows.push(theme.fg("muted", "  (none)"));
+    } else {
+      jobs.forEach((row, index) => {
+        rows.push(this.renderListRow(theme, row, index === this.listCursor, innerWidth));
+      });
+    }
+    rows.push(this.mutedRule(innerWidth));
+    rows.push(this.renderSectionHeader(theme, "Completed workflows", innerWidth));
+    if (workflows.length === 0) {
+      rows.push(theme.fg("muted", "  (none)"));
+    } else {
+      workflows.forEach((row, index) => {
+        const cursor = jobs.length + index;
+        rows.push(this.renderListRow(theme, row, cursor === this.listCursor, innerWidth));
+      });
+    }
     return rows;
   }
 
-  // Cached terminal width passed to render(width) — the list-row builder
-  // needs the same width the renderer used so truncation matches.
-  private lastRenderWidth = 80;
-
-  // Row index in buildListRows() of the current cursor's selected item.
+  // Row index in listBodyRows() of the current cursor's selected item.
   // Returns -1 if no cursor item is selectable (empty state).
   private listRowIndex(): number {
-    // Build a parallel structure as the builder did to find the cursor's
-    // row, since cursor selection is data-driven (the same shape of
-    // sections + items).
-    let cursorRow = -1;
     let i = 0;
-    // Header (1 row) + null divider = 2 rows consumed.
-    i += 2;
     const { jobs: js, workflows: wfs } = this.lists;
-    if (js.length === 0 && wfs.length === 0) return cursorRow; // "No finished..." row, no cursor
+    if (js.length === 0 && wfs.length === 0) return -1; // "No finished..." row, no cursor
     i += 1; // section header "Completed jobs"
     if (js.length === 0) {
       i += 1; // "(none)"
     } else {
-      if (this.listCursor < js.length) {
-        cursorRow = i + this.listCursor;
-        return cursorRow;
-      }
+      if (this.listCursor < js.length) return i + this.listCursor;
       i += js.length;
     }
-    i += 1; // null divider
+    i += 1; // muted rule
     i += 1; // section header "Completed workflows"
     if (wfs.length === 0) {
       i += 1; // "(none)"
     } else {
       const wfIndex = this.listCursor - js.length;
-      if (wfIndex >= 0 && wfIndex < wfs.length) {
-        cursorRow = i + wfIndex;
-      }
+      if (wfIndex >= 0 && wfIndex < wfs.length) return i + wfIndex;
     }
-    return cursorRow;
+    return -1;
   }
 
   private renderListFrame(width: number): string[] {
-    const theme = this.ctx.ui.theme;
-    const border = (text: string) => theme.fg("accent", text);
-    this.lastRenderWidth = width;
-    const rows = this.buildListRows();
-    // Keep the cursor in view after every render too — handles initial
-    // open at the same scroll state as the last cursor move.
-    const cursorRow = this.listRowIndex();
-    if (cursorRow >= 0) {
-      this.listScrollOffset = this.scrollToShow(cursorRow, this.listScrollOffset, rows.length);
-    }
-    const visible = this.windowedRows(this.listScrollOffset, rows.length, rows);
-    return frameLines(border, width, visible);
+    return renderFrame(this.listSpec(), {
+      theme: this.ctx.ui.theme,
+      tui: this.tui!,
+      viewport: this.listViewport,
+      width
+    });
   }
 
-  private buildStepsRows(): Array<string | null> {
-    const theme = this.ctx.ui.theme;
-    const innerWidth = Math.max(4, this.lastRenderWidth - 4);
-    const wf = this.stepsWorkflow;
+  // Steps view: bold accent title via headerRow with a right-aligned step
+  // count, then the runnable steps; same cursor-visible windowing as list.
+  private stepsSpec(wf: MinionWorkflow): FrameSpec {
+    return {
+      border: (theme) => (text) => theme.fg("accent", text),
+      titleRows: ({ theme, innerWidth }) => [
+        headerRow(
+          theme,
+          theme.bold(theme.fg("accent", `${glyph("⇉ ")}${wf.title}`)),
+          theme.fg("muted", `Steps · ${wf.steps.length} total`),
+          innerWidth
+        ),
+        null
+      ],
+      body: ({ theme, innerWidth }) => ({
+        rows: this.stepsBodyRows(theme, wf, innerWidth),
+        cursorRow: this.stepsRowIndex()
+      }),
+      footerRows: ({ theme }) => [null, theme.fg("muted", "↑↓ navigate  Enter open detail  Esc back")]
+    };
+  }
+
+  private stepsBodyRows(theme: Theme, wf: MinionWorkflow, innerWidth: number): Array<string | null> {
     const rows: Array<string | null> = [];
-    if (!wf) return rows;
-    // Title bar, matching JobDetailModal: bold accent title on the left,
-    // muted metadata right-aligned, then a ├──┤ rule underneath.
-    const titlePart = theme.bold(theme.fg("accent", `${glyph("⇉ ")}${wf.title}`));
-    const metaPart = theme.fg("muted", `Steps · ${wf.steps.length} total`);
-    const gap = Math.max(1, innerWidth - visibleWidth(titlePart) - visibleWidth(metaPart));
-    rows.push(`${titlePart}${" ".repeat(gap)}${metaPart}`);
-    rows.push(null);
     const steps = wf.steps.filter((step) => step.jobId !== undefined);
     if (steps.length === 0) {
       rows.push(theme.fg("muted", "  (no runnable steps)"));
@@ -570,15 +506,12 @@ class TrailBrowser implements Component {
         rows.push(this.renderStepsRow(theme, formatStepTrailLabel(step), isCursor, innerWidth));
       });
     }
-    rows.push(null);
-    rows.push(theme.fg("muted", "↑↓ navigate  Enter open detail  Esc back"));
     return rows;
   }
 
-  // Non-title, non-footer divider: a muted full-width rule rendered as
-  // a content row (the pattern JobDetailModal uses for its in-content
-  // separator). The title-bar and footer-bar rules stay full-strength
-  // ├──┤ null dividers.
+  // Non-title, non-footer divider: a muted full-width rule rendered as a
+  // content row (the detail spec's in-content separator pattern). The
+  // title-bar and footer-bar rules stay full-strength ├──┤ null dividers.
   private mutedRule(innerWidth: number): string {
     return this.ctx.ui.theme.fg("borderMuted", "─".repeat(innerWidth));
   }
@@ -588,26 +521,22 @@ class TrailBrowser implements Component {
     if (!wf) return -1;
     const steps = wf.steps.filter((step) => step.jobId !== undefined);
     if (steps.length === 0) return -1;
-    // Title-bar row + null divider = 2 rows consumed before the steps.
-    return 2 + this.stepsCursor;
+    return this.stepsCursor;
   }
 
   private renderStepsFrame(width: number): string[] {
     const theme = this.ctx.ui.theme;
-    const border = (text: string) => theme.fg("accent", text);
-    this.lastRenderWidth = width;
     const wf = this.stepsWorkflow;
     if (!wf) {
       this.view = "list";
       return this.renderListFrame(width);
     }
-    const rows = this.buildStepsRows();
-    const cursorRow = this.stepsRowIndex();
-    if (cursorRow >= 0) {
-      this.stepsScrollOffset = this.scrollToShow(cursorRow, this.stepsScrollOffset, rows.length);
-    }
-    const visible = this.windowedRows(this.stepsScrollOffset, rows.length, rows);
-    return frameLines(border, width, visible);
+    return renderFrame(this.stepsSpec(wf), {
+      theme,
+      tui: this.tui!,
+      viewport: this.stepsViewport,
+      width
+    });
   }
 
   private renderSectionHeader(theme: Theme, title: string, innerWidth: number): string {
