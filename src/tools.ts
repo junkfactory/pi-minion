@@ -5,7 +5,7 @@ import { Type, type Static } from "typebox";
 import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
 import { commandExists } from "./adapters/util.js";
 import { getAdapter, listAdapterNames } from "./adapters/registry.js";
-import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig } from "./config.js";
+import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, isModelAllowed, loadConfig } from "./config.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
 import { glyph } from "./glyphs.js";
@@ -271,16 +271,22 @@ async function confirmWorkflowRequest(
 // availableIds() over present adapters — each adapter self-declares the model
 // strings it offers (aliases + the live catalog the pi adapter reads from its
 // model registry). Filtering through ownsModel catches models that aren't
-// routable by anyone present and stray versions nobody claims.
+// routable by anyone present and stray versions nobody claims. The same
+// isModelAllowed gate as validateRequest drops blockedModels (and, when
+// allowedModels is non-empty, anything unlisted) so help never recommends a
+// model a run would reject.
 export function buildHelpModelList(
   candidates: Array<{ adapter: AgentCliAdapter; present: boolean }>,
-  allowedModels: string[]
+  config: Pick<MinionConfig, "allowedModels" | "blockedModels">
 ): string[] {
   const present = candidates.filter((candidate) => candidate.present);
-  const universe = allowedModels.length
-    ? allowedModels
+  const universe = config.allowedModels.length
+    ? config.allowedModels
     : [...new Set(present.flatMap(({ adapter }) => adapter.availableIds?.() ?? []))];
-  return universe.filter((model) => present.some(({ adapter }) => adapter.ownsModel(model)));
+  return universe.filter(
+    (model) =>
+      isModelAllowed(config, model) && present.some(({ adapter }) => adapter.ownsModel(model))
+  );
 }
 
 function textResult<T>(text: string, details: T) {
@@ -712,7 +718,7 @@ export function registerTools(pi: ExtensionAPI): void {
         })
       );
       const payload = {
-        models: buildHelpModelList(candidates, config.allowedModels),
+        models: buildHelpModelList(candidates, config),
         examples: PI_MINION_EXAMPLES,
         usageNotes: PI_MINION_USAGE_NOTES
       };

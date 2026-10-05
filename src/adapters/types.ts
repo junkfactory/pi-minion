@@ -1,5 +1,10 @@
 export type MinionConfig = {
   allowedModels: string[];
+  // Denylist taking precedence over allowedModels. Entries are exact model
+  // ids or a trailing-'*' prefix pattern ("gemini*" blocks gemini-flash,
+  // gemini-pro, ...). Checked before allowedModels; empty/absent = nothing
+  // blocked. Merged wholesale like allowedModels.
+  blockedModels?: string[];
   allowedTools: string[];
   maxBudgetUsd: number;
   timeoutMs: number;

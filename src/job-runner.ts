@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_RESULT_PREVIEW_BYTES,
   DEFAULT_PRUNE_AFTER_DAYS,
   isModelAllowed,
+  isModelBlocked,
   loadConfig
 } from "./config.js";
 import {
@@ -55,7 +56,9 @@ export async function validateRequest(
     throw new Error("workspace is not a directory");
   if (!isModelAllowed(config, request.model))
     throw new Error(
-      `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
+      isModelBlocked(config, request.model)
+        ? `Model is blocked: ${request.model} (blockedModels). Call help_pi_minion for the models usable here.`
+        : `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
     );
   if (
     request.maxBudgetUsd !== undefined &&

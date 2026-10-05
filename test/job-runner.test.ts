@@ -37,6 +37,38 @@ describe("validateRequest", () => {
     }
   });
 
+  it("rejects a blocked model with the blockedModels message", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    try {
+      await assert.rejects(
+        validateRequest(
+          fakeRequest({ workspace: dir, model: "gemini-pro" }),
+          dir,
+          fakeConfig({ blockedModels: ["gemini*"] })
+        ),
+        /Model is blocked:/
+      );
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("distinguishes an allowlist miss from a blocked model", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    try {
+      await assert.rejects(
+        validateRequest(
+          fakeRequest({ workspace: dir, model: "gemini-pro" }),
+          dir,
+          fakeConfig({ allowedModels: ["sonnet"], blockedModels: [] })
+        ),
+        /Model is not allowed:/
+      );
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("allows any model when allowedModels is empty (allow-all default)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {

@@ -24,7 +24,7 @@ describe("buildHelpModelList", () => {
         { adapter: claudeAdapter, present: true },
         { adapter: agyAdapter, present: false }
       ],
-      ["sonnet", "opus", "gemini-flash"]
+      { allowedModels: ["sonnet", "opus", "gemini-flash"], blockedModels: [] }
     );
     assert.deepEqual(result, ["sonnet", "opus"]);
   });
@@ -35,13 +35,16 @@ describe("buildHelpModelList", () => {
         { adapter: claudeAdapter, present: true },
         { adapter: agyAdapter, present: true }
       ],
-      ["gemini-flash", "sonnet", "gpt-oss"]
+      { allowedModels: ["gemini-flash", "sonnet", "gpt-oss"], blockedModels: [] }
     );
     assert.deepEqual(result, ["gemini-flash", "sonnet", "gpt-oss"]);
   });
 
   it("returns an empty list when no candidate is present", () => {
-    assert.deepEqual(buildHelpModelList([{ adapter: claudeAdapter, present: false }], ["sonnet"]), []);
+    assert.deepEqual(
+      buildHelpModelList([{ adapter: claudeAdapter, present: false }], { allowedModels: ["sonnet"], blockedModels: [] }),
+      []
+    );
   });
 
   it("with an empty allowlist, lists available catalog ids the present adapters own", () => {
@@ -57,7 +60,7 @@ describe("buildHelpModelList", () => {
           { adapter: claudeAdapter, present: true },
           { adapter: piAdapter, present: true }
         ],
-        []
+        { allowedModels: [], blockedModels: [] }
       );
       // claude's own aliases (sonnet/opus/haiku/fable) + pi's live
       // catalog (gpt-6-luna, deduped across providers); anything the
@@ -80,12 +83,35 @@ describe("buildHelpModelList", () => {
         { adapter: agyAdapter, present: true },
         { adapter: piAdapter, present: true }
       ],
-      []
+      { allowedModels: [], blockedModels: [] }
     );
     assert.ok(result.includes("opus"), "claude alias missing");
     assert.ok(result.includes("sonnet"), "claude alias missing");
     assert.ok(result.includes("gemini-flash"), "agy alias missing");
     assert.ok(result.includes("gpt-oss"), "agy alias missing");
+  });
+
+  it("filters blocked ids out of an explicit allowlist", () => {
+    const result = buildHelpModelList(
+      [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true }
+      ],
+      { allowedModels: ["sonnet", "gemini-flash"], blockedModels: ["gemini*"] }
+    );
+    assert.deepEqual(result, ["sonnet"]);
+  });
+
+  it("filters blocked ids out of the allow-all universe", () => {
+    const result = buildHelpModelList(
+      [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true }
+      ],
+      { allowedModels: [], blockedModels: ["gemini*"] }
+    );
+    assert.ok(result.includes("sonnet"), "sonnet missing");
+    assert.ok(!result.some((model) => model.startsWith("gemini")), `gemini ids leaked: ${result.join(", ")}`);
   });
 });
 

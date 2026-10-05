@@ -59,7 +59,8 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   const config = applyConfigOverride(base, overrideText, overridePath);
   if (
     !Array.isArray(config.allowedModels) ||
-    !Array.isArray(config.allowedTools)
+    !Array.isArray(config.allowedTools) ||
+    (config.blockedModels !== undefined && !Array.isArray(config.blockedModels))
   ) {
     throw new Error(
       overrideText !== undefined
@@ -74,12 +75,30 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
 // adapter can own is allowed (with the pi adapter routing against the live
 // catalog, that's every credential-available model on this machine; unknown
 // ids still fail at startJob with "Unknown model"). A non-empty list is a
-// strict whitelist, checked exactly.
-export function isModelAllowed(
-  config: Pick<MinionConfig, "allowedModels">,
+// strict whitelist — entries may carry the same trailing-'*' wildcard as
+// blockedModels.
+// Trailing '*' = prefix match ("gemini*" → startsWith("gemini"));
+// no '*' = exact match. A leading '*' would also be a prefix match of
+// the remainder, so guard: only a TRAILING '*' is a wildcard.
+function modelMatchesPattern(model: string, pattern: string): boolean {
+  return pattern.endsWith("*")
+    ? model.startsWith(pattern.slice(0, -1))
+    : model === pattern;
+}
+
+export function isModelBlocked(
+  config: Pick<MinionConfig, "blockedModels">,
   model: string
 ): boolean {
-  return config.allowedModels.length === 0 || config.allowedModels.includes(model);
+  return (config.blockedModels ?? []).some((p) => modelMatchesPattern(model, p));
+}
+
+export function isModelAllowed(
+  config: Pick<MinionConfig, "allowedModels" | "blockedModels">,
+  model: string
+): boolean {
+  if (isModelBlocked(config, model)) return false;
+  return config.allowedModels.length === 0 || config.allowedModels.some((p) => modelMatchesPattern(model, p));
 }
 
 export function resolveShortcut(config: Pick<MinionConfig, "shortcut">): KeyId {

@@ -5,7 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { MinionConfig } from "../src/adapters/types.js";
-import { applyConfigOverride, loadConfig, readShortcutConfigSync, resolveShortcut, USER_CONFIG_PATH } from "../src/config.js";
+import {
+  applyConfigOverride,
+  isModelAllowed,
+  isModelBlocked,
+  loadConfig,
+  readShortcutConfigSync,
+  resolveShortcut,
+  USER_CONFIG_PATH
+} from "../src/config.js";
 import { fakeConfig } from "./fakes.js";
 
 describe("loadConfig", () => {
@@ -48,6 +56,17 @@ describe("loadConfig", () => {
     }
   });
 
+  it("throws when a merged override gives blockedModels the wrong type", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ blockedModels: "oops" }), "utf8");
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("ignores a leftover defaultEffort key from older override files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");
@@ -58,6 +77,50 @@ describe("loadConfig", () => {
     } finally {
       await rm(dir, { recursive: true });
     }
+  });
+});
+
+describe("isModelAllowed / isModelBlocked", () => {
+  it("treats an empty blockedModels as nothing blocked", () => {
+    const config = fakeConfig({ allowedModels: ["sonnet"], blockedModels: [] });
+    assert.equal(isModelAllowed(config, "sonnet"), true);
+    assert.equal(isModelAllowed(config, "haiku"), false);
+    assert.equal(isModelBlocked(config, "haiku"), false);
+  });
+
+  it("blocks every id matching a trailing-'*' prefix pattern", () => {
+    const config = fakeConfig({ allowedModels: [], blockedModels: ["gemini*"] });
+    for (const model of ["gemini-flash", "gemini-pro", "gemini-3.1-pro"]) {
+      assert.equal(isModelBlocked(config, model), true, `${model} not blocked`);
+      assert.equal(isModelAllowed(config, model), false, `${model} not blocked`);
+    }
+    assert.equal(isModelAllowed(config, "sonnet"), true);
+  });
+
+  it("allows every id matching a trailing-'*' prefix pattern in allowedModels", () => {
+    const config = fakeConfig({ allowedModels: ["gemini*"], blockedModels: [] });
+    for (const model of ["gemini-flash", "gemini-pro", "gemini-3.1-pro"]) {
+      assert.equal(isModelAllowed(config, model), true, `${model} not allowed`);
+    }
+    assert.equal(isModelAllowed(config, "sonnet"), false);
+  });
+
+  it("lets blockedModels win over allowedModels (precedence)", () => {
+    const config = fakeConfig({ allowedModels: ["gemini-flash"], blockedModels: ["gemini*"] });
+    assert.equal(isModelBlocked(config, "gemini-flash"), true);
+    assert.equal(isModelAllowed(config, "gemini-flash"), false);
+  });
+
+  it("matches a pattern without '*' exactly, not as a prefix", () => {
+    const config = fakeConfig({ allowedModels: [], blockedModels: ["kimi-k3"] });
+    assert.equal(isModelBlocked(config, "kimi-k3"), true);
+    assert.equal(isModelBlocked(config, "kimi-k3-flash"), false);
+    assert.equal(isModelAllowed(config, "kimi-k3-flash"), true);
+  });
+
+  it("reports nothing blocked when blockedModels is absent", () => {
+    assert.equal(isModelBlocked({}, "sonnet"), false);
+    assert.equal(isModelAllowed({ allowedModels: [], blockedModels: undefined }, "sonnet"), true);
   });
 });
 

@@ -4,6 +4,7 @@ import type { MinionConfig, MinionRequest } from "../src/adapters/types.js";
 export function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
     allowedModels: ["sonnet", "opus"],
+    blockedModels: [],
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
