@@ -92,6 +92,13 @@ export interface AgentCliAdapter {
   // CLI, not a user-configurable knob, which is why it lives in code rather
   // than pi-minion.json.
   ownsModel(model: string): boolean;
+  // Model strings this adapter contributes to help_pi_minion's "allow all"
+  // universe when allowedModels is empty. Distinct from ownsModel:
+  // ownsModel is a predicate (accepts e.g. any future "claude-foo" id),
+  // availableIds is an enumeration of what's reasonable to suggest today.
+  // Optional — adapters that don't ship with the user-callable aliases (e.g.
+  // a future CLI that routes only version-resolved live ids) leave it off.
+  availableIds?(): string[];
   buildArgs(request: MinionRequest, config: MinionConfig): string[];
   environment(): NodeJS.ProcessEnv;
   parseLine(line: string): NormalizedEvent[];

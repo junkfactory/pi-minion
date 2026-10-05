@@ -23,6 +23,21 @@ export function ownsModel(model: string): boolean {
   return /^(gemini-|gpt-oss)/i.test(model);
 }
 
+// Same staleness risk as MODEL_ALIASES — re-check `agy models` periodically. We
+// list both aliases ("gemini-flash") and their resolved ids ("gemini-3.8-flash")
+// so the help output is useful whether the caller prefers short aliases or
+// pinned versions. Other gemini-/gpt-oss-prefixed ids are accepted by
+// ownsModel but not enumerated here; they'll route fine, just won't appear in
+// help_pi_minion until this list catches up.
+export function availableIds(): string[] {
+  const ids = new Set<string>();
+  for (const [alias, resolved] of Object.entries(MODEL_ALIASES)) {
+    ids.add(alias);
+    ids.add(resolved);
+  }
+  return [...ids];
+}
+
 function resolveModelId(model: string): string {
   return MODEL_ALIASES[model] ?? model;
 }
@@ -222,6 +237,7 @@ export const agyAdapter: AgentCliAdapter = {
     "one or more actions were denied during this run (agy reported denied_actions); the result below may be incomplete.",
   capabilities,
   ownsModel,
+  availableIds,
   buildArgs,
   environment,
   parseLine,

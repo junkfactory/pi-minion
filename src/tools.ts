@@ -3,7 +3,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { Type, type Static } from "typebox";
 import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
-import { availableModelIds } from "./adapters/pi.js";
 import { commandExists } from "./adapters/util.js";
 import { getAdapter, listAdapterNames } from "./adapters/registry.js";
 import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig } from "./config.js";
@@ -268,16 +267,19 @@ async function confirmWorkflowRequest(
 // A model whose adapter binary isn't on PATH is dropped — recommending a model
 // that would currently fail to spawn isn't useful. Adapters stay internal: the
 // agent only ever sees model names.
-// Empty allowedModels means "allow all": the universe becomes the live
-// catalog ids (availableModelIds()), each filtered through ownership like
-// the allowlisted path.
+// Empty allowedModels means "allow all": the universe is the union of
+// availableIds() over present adapters — each adapter self-declares the model
+// strings it offers (aliases + the live catalog the pi adapter reads from its
+// model registry). Filtering through ownsModel catches models that aren't
+// routable by anyone present and stray versions nobody claims.
 export function buildHelpModelList(
   candidates: Array<{ adapter: AgentCliAdapter; present: boolean }>,
-  allowedModels: string[],
-  availableIds: string[] = []
+  allowedModels: string[]
 ): string[] {
   const present = candidates.filter((candidate) => candidate.present);
-  const universe = allowedModels.length ? allowedModels : availableIds;
+  const universe = allowedModels.length
+    ? allowedModels
+    : [...new Set(present.flatMap(({ adapter }) => adapter.availableIds?.() ?? []))];
   return universe.filter((model) => present.some(({ adapter }) => adapter.ownsModel(model)));
 }
 
@@ -710,7 +712,7 @@ export function registerTools(pi: ExtensionAPI): void {
         })
       );
       const payload = {
-        models: buildHelpModelList(candidates, config.allowedModels, availableModelIds()),
+        models: buildHelpModelList(candidates, config.allowedModels),
         examples: PI_MINION_EXAMPLES,
         usageNotes: PI_MINION_USAGE_NOTES
       };

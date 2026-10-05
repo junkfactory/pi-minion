@@ -21,6 +21,13 @@ export function ownsModel(model: string): boolean {
   return CLAUDE_MODEL_ALIASES.has(model) || /^claude-/i.test(model);
 }
 
+// Stays in sync with CLAUDE_MODEL_ALIASES — both come from the same `claude`
+// CLI release. The help universe lists aliases; literal "claude-*" ids only
+// appear if a user pins them, so they're not enumerated here.
+export function availableIds(): string[] {
+  return [...CLAUDE_MODEL_ALIASES];
+}
+
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   const task = resolveTaskText(request);
   return [
@@ -390,6 +397,7 @@ export const claudeAdapter: AgentCliAdapter = {
     "one or more actions were denied by the auto-mode permission classifier during this run; the result below may be incomplete.",
   capabilities,
   ownsModel,
+  availableIds,
   buildArgs,
   environment,
   parseLine,

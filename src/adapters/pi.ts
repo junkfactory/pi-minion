@@ -267,6 +267,7 @@ export const piAdapter: AgentCliAdapter = {
     "one or more actions were denied during this run; the result below may be incomplete.",
   capabilities,
   ownsModel,
+  availableIds: availableModelIds,
   buildArgs,
   environment,
   parseLine,

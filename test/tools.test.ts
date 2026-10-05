@@ -57,15 +57,35 @@ describe("buildHelpModelList", () => {
           { adapter: claudeAdapter, present: true },
           { adapter: piAdapter, present: true }
         ],
-        [],
-        ["claude-sonnet-5-5", "gpt-6-luna", "totally-unknown"]
+        []
       );
-      // claude-* → claude adapter; gpt-6-luna → pi via the captured catalog;
-      // totally-unknown → nobody owns it, dropped (duplicates deduped).
-      assert.deepEqual(result, ["claude-sonnet-5-5", "gpt-6-luna"]);
+      // claude's own aliases (sonnet/opus/haiku/fable) + pi's live
+      // catalog (gpt-6-luna, deduped across providers); anything the
+      // adapters don't claim is filtered out.
+      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "gpt-6-luna"]);
     } finally {
       setModelRegistry(undefined);
     }
+  });
+
+  it("with an empty allowlist, lists non-pi adapter ids even when the pi registry is unset", () => {
+    // Regression: help_pi_minion used to source its universe from
+    // availableModelIds() (the pi registry only), so claude/agy models
+    // weren't listed when their CLIs were present, and "run opus minion"
+    // later errored as an unsupported model.
+    setModelRegistry(undefined);
+    const result = buildHelpModelList(
+      [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true },
+        { adapter: piAdapter, present: true }
+      ],
+      []
+    );
+    assert.ok(result.includes("opus"), "claude alias missing");
+    assert.ok(result.includes("sonnet"), "claude alias missing");
+    assert.ok(result.includes("gemini-flash"), "agy alias missing");
+    assert.ok(result.includes("gpt-oss"), "agy alias missing");
   });
 });
 
