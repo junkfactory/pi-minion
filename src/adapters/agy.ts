@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type {
   AdapterCapabilities,
   AgentCliAdapter,
@@ -7,39 +9,195 @@ import type {
 } from "./types.js";
 import { MINION_PROMPT_BASE, resolveTaskText, sumFields } from "./util.js";
 
-// agy also lists claude-* slugs (it's Google's own multi-provider router), but
-// Claude models always route through claudeAdapter — this prefix intentionally
-// covers only the aliases below and any literal Gemini/GPT-OSS slug a user
-// pins directly, never claude-*.
-const MODEL_ALIASES: Record<string, string> = {
-  // Latest version pointers as of 2026-09 — re-check `agy models` periodically;
-  // same staleness risk as claude.ts's CLAUDE_MODEL_ALIASES.
-  "gemini-flash": "gemini-3.8-flash",
-  "gemini-pro": "gemini-3.1-pro",
-  "gpt-oss": "gpt-oss-120b"
+// The live model catalog, parsed from `agy --output-format=json models`.
+// Everything below (ownership, derived aliases, help ids, --model resolution)
+// derives from this snapshot — the same capture-and-refresh shape pi.ts's
+// setModelRegistry uses, so a new Gemini/GPT-OSS release needs no code changes.
+type AgyModelEntry = { id: string; label?: string };
+
+type AgyModelsEvent = {
+  status?: unknown;
+  command?: { data?: { models?: unknown } };
 };
 
-export function ownsModel(model: string): boolean {
-  return /^(gemini-|gpt-oss)/i.test(model);
-}
-
-// Same staleness risk as MODEL_ALIASES — re-check `agy models` periodically. We
-// list both aliases ("gemini-flash") and their resolved ids ("gemini-3.8-flash")
-// so the help output is useful whether the caller prefers short aliases or
-// pinned versions. Other gemini-/gpt-oss-prefixed ids are accepted by
-// ownsModel but not enumerated here; they'll route fine, just won't appear in
-// help_pi_minion until this list catches up.
-export function availableIds(): string[] {
-  const ids = new Set<string>();
-  for (const [alias, resolved] of Object.entries(MODEL_ALIASES)) {
-    ids.add(alias);
-    ids.add(resolved);
+// Shape-guarded parser: [] on wrong status, wrong shape, malformed JSON —
+// never a partial result. claude-* ids are dropped here as a POLICY, not a
+// mechanism: Claude models always route through claudeAdapter, so agy must
+// not silently claim them; a new foreign-provider family needs a deliberate
+// ownership decision, not a silent filter extension.
+export function parseAgyModelsList(stdout: string): AgyModelEntry[] {
+  try {
+    const parsed = JSON.parse(stdout) as AgyModelsEvent;
+    if (parsed?.status !== "SUCCESS") return [];
+    const models = parsed.command?.data?.models;
+    if (!Array.isArray(models)) return [];
+    return models
+      .filter(
+        (model): model is { id: string; label?: unknown } =>
+          typeof model?.id === "string" &&
+          model.id !== "" &&
+          !model.id.toLowerCase().startsWith("claude-")
+      )
+      .map((model) => ({
+        id: model.id,
+        label: typeof model.label === "string" ? model.label : undefined
+      }));
+  } catch {
+    return [];
   }
-  return [...ids];
 }
 
-function resolveModelId(model: string): string {
-  return MODEL_ALIASES[model] ?? model;
+const AGY_MODELS_TTL_MS = 60 * 60 * 1000;
+// Bounded so a hung agy subprocess can't stall help_pi_minion's await.
+const AGY_MODELS_TIMEOUT_MS = 2000;
+
+// One snapshot for every consumer (see parseAgyModelsList's header). A failed
+// refresh (spawn error, timeout, parse failure) keeps the previous snapshot —
+// the catalog only empties on a legitimate empty/failed response after a
+// process restart, or never mid-session, so a transient agy hiccup never
+// routes a job to nothing.
+let cache: { entries: AgyModelEntry[]; fetchedAt: number } | undefined;
+let inflight: Promise<void> | undefined;
+
+export async function refreshAgyModels(): Promise<void> {
+  // Fresh enough snapshot: caller gets the cache without re-spawning agy.
+  if (cache && Date.now() - cache.fetchedAt < AGY_MODELS_TTL_MS) return;
+  if (inflight) return inflight; // dedupe concurrent calls, no subprocess pounding
+  inflight = (async () => {
+    const execFileAsync = promisify(execFile);
+    const result = await execFileAsync(
+      "agy",
+      ["--output-format=json", "models"],
+      { timeout: AGY_MODELS_TIMEOUT_MS }
+    );
+    cache = { entries: parseAgyModelsList(result.stdout), fetchedAt: Date.now() };
+  })()
+    .catch(() => {
+      // spawn error / timeout — snapshot unchanged, same as if agy were absent.
+    })
+    .finally(() => {
+      inflight = undefined;
+    });
+  return inflight;
+}
+
+function cachedEntries(): AgyModelEntry[] {
+  return cache?.entries ?? [];
+}
+
+// Test-only: seed/restore the snapshot without spawning agy.
+export function setAgyModelsForTesting(entries: AgyModelEntry[] | undefined): void {
+  cache = entries ? { entries, fetchedAt: Date.now() } : undefined;
+}
+
+// Version segment of a catalog id: the digit-led token
+// ("gemini-3.8-flash-high" -> "3.8", "gpt-oss-120b-medium" -> "120b").
+function versionOf(id: string): string | undefined {
+  return (
+    id
+      .toLowerCase()
+      .split("-")
+      .find((token) => /^\d/.test(token))
+  );
+}
+
+function versionRank(version: string | undefined): number {
+  if (version === undefined) return 0;
+  const match = /^(\d+(?:\.\d+)*)(.*)$/.exec(version);
+  if (!match) return 0;
+  let rank = 0;
+  for (const part of match[1].split(".")) rank = rank * 1000 + Number(part);
+  return rank; // [3,8] -> 3008 > [3,7] -> 3007; [120] -> 120 > [20] -> 20
+}
+
+const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
+
+// Derived alias clusters: ids sharing a stem once the version token is
+// dropped, e.g. gemini-3.8-flash-high -> gemini-flash, gpt-oss-120b-medium ->
+// gpt-oss. Latest version wins; effort resolution matches the request's
+// effort exactly, then falls to the nearest rank, preferring the
+// higher-intensity side (so gemini-pro + medium lands on high, matching
+// agy's own high>low tie-break on a 2-suffix catalog).
+export type AliasCluster = {
+  name: string;
+  members: Array<{ id: string; version: string | undefined; effort?: string }>;
+};
+
+const aliasMemo = new WeakMap<AgyModelEntry[], AliasCluster[]>();
+
+export function deriveAliases(entries: AgyModelEntry[]): AliasCluster[] {
+  const memoed = aliasMemo.get(entries);
+  if (memoed) return memoed;
+  const clusters = new Map<string, AliasCluster>();
+  for (const entry of entries) {
+    const tokens = entry.id.toLowerCase().split("-");
+    const version = versionOf(entry.id);
+    // Effort is recognized as the trailing token of a versioned id only —
+    // an id without a version segment keeps its full string as the stem
+    // (its last token would otherwise alias-strip a meaningful word).
+    const last = tokens[tokens.length - 1] ?? "";
+    const effort = version !== undefined && last in EFFORT_RANK ? last : undefined;
+    const stemTokens = version !== undefined ? tokens.filter((token) => token !== version && token !== effort) : tokens;
+    const stem = stemTokens.join("-");
+    const cluster = clusters.get(stem) ?? { name: stem, members: [] };
+    cluster.members.push({ id: entry.id, version, effort });
+    clusters.set(stem, cluster);
+  }
+  const derived = [...clusters.values()];
+  aliasMemo.set(entries, derived);
+  return derived;
+}
+
+export function resolveAlias(cluster: AliasCluster, effort: string): string {
+  // Latest version wins (3.8 over 3.7 over 3.1); undefined versions rank 0.
+  const latest = cluster.members.reduce((best, member) =>
+    versionRank(member.version) > versionRank(best.version) ? member : best
+  );
+  const latestMembers = cluster.members.filter(
+    (member) => versionRank(member.version) === versionRank(latest.version)
+  );
+  const ranked = latestMembers
+    .filter((member) => member.effort !== undefined)
+    .map((member) => ({ ...member, rank: EFFORT_RANK[member.effort as string] }));
+  if (!ranked.length) return latest.id; // effort-less cluster: bare latest id
+  const requested = EFFORT_RANK[effort.toLowerCase()];
+  if (requested === undefined) return ranked[0].id;
+  const exact = ranked.find((member) => member.rank === requested);
+  if (exact) return exact.id;
+  // Nearest effort rank; on an equal distance, prefer the higher side.
+  const closer = (member: (typeof ranked)[number], best: (typeof ranked)[number]) =>
+    Math.abs(member.rank - requested) < Math.abs(best.rank - requested) ||
+    (Math.abs(member.rank - requested) === Math.abs(best.rank - requested) &&
+      member.rank > best.rank);
+  return ranked.reduce((best, member) => (closer(member, best) ? member : best)).id;
+}
+
+// Single resolution path shared by buildArgs and ownsModel: a literal catalog
+// id passes through; a derived alias resolves to a concrete id (see
+// resolveAlias); anything else passes through untouched — agy prints its own
+// error for a model it doesn't recognize, same failure surface as today.
+function resolveModelAgainstCatalog(model: string, effort: string): string {
+  const entries = cachedEntries();
+  const lower = model.toLowerCase();
+  const exact = entries.find((entry) => entry.id.toLowerCase() === lower);
+  if (exact) return exact.id;
+  const cluster = deriveAliases(entries).find((alias) => alias.name === lower);
+  if (!cluster) return model;
+  return resolveAlias(cluster, effort);
+}
+
+export function ownsModel(model: string): boolean {
+  const entries = cachedEntries();
+  const lower = model.toLowerCase();
+  if (entries.some((entry) => entry.id.toLowerCase() === lower)) return true;
+  return deriveAliases(entries).some((cluster) => cluster.name === lower);
+}
+
+// help_pi_minion's universe: aliases first (they read naturally), then the
+// concrete catalog ids — reflected live from agy's models snapshot.
+export function availableIds(): string[] {
+  const entries = cachedEntries();
+  return [...deriveAliases(entries).map((cluster) => cluster.name), ...entries.map((entry) => entry.id)];
 }
 
 export function buildArgs(request: MinionRequest, _config: MinionConfig): string[] {
@@ -62,7 +220,7 @@ export function buildArgs(request: MinionRequest, _config: MinionConfig): string
     "--output-format",
     "stream-json",
     "--model",
-    resolveModelId(request.model),
+    resolveModelAgainstCatalog(request.model, request.effort),
     "--effort",
     request.effort
   ];
@@ -238,6 +396,7 @@ export const agyAdapter: AgentCliAdapter = {
   capabilities,
   ownsModel,
   availableIds,
+  refreshCatalog: refreshAgyModels,
   buildArgs,
   environment,
   parseLine,

@@ -711,6 +711,10 @@ export function registerTools(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     async execute() {
       const config = await loadConfig();
+      // Opportunistic live-catalog refresh over every registered adapter —
+      // whatever subprocess or registry lookup enumerates models, it happens
+      // inside the adapter. A failed refresh keeps the previous snapshot.
+      await Promise.all(listAdapterNames().map((id) => getAdapter(id).refreshCatalog?.()));
       const candidates = await Promise.all(
         listAdapterNames().map(async (id) => {
           const adapter = getAdapter(id);

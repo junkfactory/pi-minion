@@ -11,7 +11,7 @@ flowchart LR
     pi["pi session<br/>pi-minion extension"]
     sched["Cron schedules<br/>(croner, in-session)"]
     claude["claude -p<br/>claude-* models"]
-    agy["agy -p<br/>gemini-* / gpt-oss models"]
+    agy["agy -p<br/>gemini-* / gpt-oss models<br/>(catalog from `agy models`)\]"]
     piminion["pi --mode json<br/>gpt-* / provider:id models"]
 
     pi -->|arm / stop| sched
@@ -28,6 +28,16 @@ Each delegation spawns a detached headless CLI chosen by which adapter owns
 the requested model; results are pushed back into the session when it exits —
 no polling. `schedule_pi_minion` automates the same call on a cron, and
 workflows fan out one job per step.
+
+Model catalogs are live everywhere: pi's adapter routes against the parent
+session's model registry, and agy's adapter parses
+`agy --output-format=json models` at session start (claude ids in that output
+are filtered out — they stay owned by the claude adapter). Short aliases like
+`gemini-flash` are derived from agy's catalog, not hardcoded — a new Gemini
+or GPT-OSS release needs no code change. Aliases resolve to the latest
+version's id with the requested (or nearest, higher-preferring) effort
+suffix; a failed catalog refresh keeps the last snapshot, and a CLI that
+isn't installed simply owns nothing.
 
 ## Tools & features
 
@@ -222,18 +232,18 @@ You can then prompt pi like
 
 [`pi-minion.json`](./pi-minion.json), at the package root:
 
-| Field                   | Required     | Meaning                                                                                                                                                                                                                                                                      |
-|-------------------------|--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. Entries may use a trailing-`*` prefix pattern, same as `blockedModels`.                                        |
-| `blockedModels`         | no (`[]`)    | Denylist taking precedence over `allowedModels` — a match is rejected even if allowed. Entries are exact ids or a trailing-`*` prefix pattern: `"gemini*"` blocks `gemini-flash`, `gemini-pro`, `gemini-3.1-pro`. Replaced wholesale by user override, like `allowedModels`. |
-| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                                                              |
-| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                                                                                                                                             |
-| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                                                                                                                                   |
-| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                                                                                                                                       |
-| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                                                                                                                                         |
-| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.                                                                                                                        |
-| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                                                                                                                                       |
-| `showGlyphs`            | no (`true`)  | Decorative glyphs (⇉ marks workflows, ⏱ schedules) in the widget and picker. pi-tui counts them as 1 cell, but a font fallback for a codepoint the terminal's font lacks can render wider/misplaced — set `false` to drop them.                                              |
+| Field                   | Required     | Meaning                                                                                                                                                                                                                                                                                                |
+|-------------------------|--------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `allowedModels`         | yes          | Models `run_pi_minion` may request; anything else is rejected. Empty array = no restriction — every model routable on this machine (live catalog) is allowed. Entries may use a trailing-`*` prefix pattern, same as `blockedModels`.                                                                  |
+| `blockedModels`         | no (`[]`)    | Denylist taking precedence over `allowedModels` — a match is rejected even if allowed. Entries are exact ids or a trailing-`*` prefix pattern: `"gemini*"` blocks `gemini-flash` and every `gemini-<version>-flash-<effort>` id agy serves. Replaced wholesale by user override, like `allowedModels`. |
+| `allowedTools`          | yes          | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                                                                                        |
+| `maxBudgetUsd`          | yes          | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                                                                                                                                                                       |
+| `timeoutMs`             | yes          | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                                                                                                                                                             |
+| `pruneAfterDays`        | no (7)       | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                                                                                                                                                                 |
+| `maxOutputBytes`        | no (15MB)    | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                                                                                                                                                                   |
+| `maxResultPreviewBytes` | no (50KB)    | Caps how much of a clean-exit result is inlined into the primary session's context; past this it's truncated with a pointer to the full text on disk.                                                                                                                                                  |
+| `shortcut`              | no (`alt+j`) | Key bound to the `/pi-minions` picker.                                                                                                                                                                                                                                                                 |
+| `showGlyphs`            | no (`true`)  | Decorative glyphs (⇉ marks workflows, ⏱ schedules) in the widget and picker. pi-tui counts them as 1 cell, but a font fallback for a codepoint the terminal's font lacks can render wider/misplaced — set `false` to drop them.                                                                        |
 
 An optional user override at `~/.pi/agent/extensions/pi-minion.json` is
 shallow-merged over the built-in file above — present keys win (array

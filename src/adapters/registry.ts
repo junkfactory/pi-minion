@@ -21,6 +21,11 @@ export function listAdapterNames(): string[] {
   return [...registry.keys()];
 }
 
+// All registered adapters (generic — callers never name a specific CLI).
+export function listAdapters(): AgentCliAdapter[] {
+  return [...registry.values()];
+}
+
 export function resolveAdapterForModel(model: string): AgentCliAdapter {
   const adapter = [...registry.values()].find((candidate) => candidate.ownsModel(model));
   if (!adapter) {

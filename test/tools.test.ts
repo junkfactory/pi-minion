@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
 import { claudeAdapter } from "../src/adapters/claude.js";
-import { agyAdapter } from "../src/adapters/agy.js";
+import { agyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
 import { piAdapter, setModelRegistry } from "../src/adapters/pi.js";
 import { fakeModelRegistry } from "./fakes.js";
 import {
@@ -17,7 +17,51 @@ import {
   SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS
 } from "../src/tools.js";
 
+describe("adapter boundary", () => {
+  // AgentCliAdapter (src/adapters/types.ts) is the only published surface
+  // outside the adapter implementation files — CLI-specific modules
+  // (claude.ts, agy.ts, pi.ts) must not be imported by outside code. This
+  // turns that boundary comment into a red test: the registry is the only
+  // door, and a new adapter module gets scanned automatically.
+  it("no src file outside adapters/ imports a specific adapter module", async () => {
+    const srcDir = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+    const files = (await readdir(srcDir)).filter((name) => name.endsWith(".ts"));
+    const offenders: string[] = [];
+    for (const name of files) {
+      const text = await readFile(join(srcDir, name), "utf8");
+      if (/from "\.\/adapters\/(claude|agy|pi)\.js"/.test(text)) offenders.push(name);
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `CLI-specific adapters leaked outside adapters/: ${offenders.join(", ")} — ` +
+        "route through registry.ts and the AgentCliAdapter interface instead"
+    );
+  });
+});
 describe("buildHelpModelList", () => {
+  // Seed agy's live catalog for this file (node:test isolates files in their
+  // own process) — parsed from the captured `agy models` payload.
+  setAgyModelsForTesting(
+    parseAgyModelsList(
+      JSON.stringify({
+        status: "SUCCESS",
+        command: {
+          data: {
+            models: [
+              { id: "gemini-3.8-flash-high" },
+              { id: "gemini-3.8-flash-medium" },
+              { id: "gemini-3.8-flash-low" },
+              { id: "gemini-3.1-pro-high" },
+              { id: "gemini-3.1-pro-low" },
+              { id: "claude-sonnet-4-6" },
+              { id: "gpt-oss-120b-medium" }
+            ]
+          }
+        }
+      })
+    )
+  );
   it("drops models whose adapter binary isn't present, keeps the rest", () => {
     const result = buildHelpModelList(
       [

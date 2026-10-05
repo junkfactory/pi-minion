@@ -2,7 +2,7 @@ import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-a
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_PRUNE_AFTER_DAYS, loadConfig, readShortcutConfigSync, resolveShortcut } from "./config.js";
 import { setShowGlyphs } from "./glyphs.js";
-import { setModelRegistry } from "./adapters/pi.js";
+import { listAdapters } from "./adapters/registry.js";
 import {
   bindSessionApi,
   holdPostsFor,
@@ -123,10 +123,14 @@ export default function (pi: ExtensionAPI) {
       replacedSessionId = undefined;
     }
     bindSessionApi(sessionId, pi);
-    // Hands the adapter the parent process's live model registry (same
-    // capture-and-refresh rationale as the jobUI setCtx above): ownsModel
-    // routes against real catalog availability from now on.
-    setModelRegistry(ctx.modelRegistry);
+    // Generic session-start hook over every registered adapter — the parent
+    // process's live state (pi: its model registry; agy: kicks off a model
+    // catalog refresh) gets captured here, so ownsModel routes against real
+    // availability from now on instead of a cold/hardcoded cache.
+    for (const adapter of listAdapters()) {
+      adapter.startSession?.(ctx);
+      void adapter.refreshCatalog?.();
+    }
     // Fires on the new, non-stale runner immediately after every session
     // replacement (/reload, /new, fork, switchSession) — and at process
     // startup — with a ctx that's valid even though no tool/command has

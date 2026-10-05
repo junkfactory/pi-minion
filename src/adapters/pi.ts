@@ -268,6 +268,7 @@ export const piAdapter: AgentCliAdapter = {
   capabilities,
   ownsModel,
   availableIds: availableModelIds,
+  startSession: (ctx) => setModelRegistry(ctx.modelRegistry),
   buildArgs,
   environment,
   parseLine,

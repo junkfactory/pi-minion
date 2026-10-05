@@ -1,3 +1,5 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
 export type MinionConfig = {
   allowedModels: string[];
   // Denylist taking precedence over allowedModels. Entries are exact model
@@ -76,6 +78,12 @@ export type AdapterCapabilities = {
   supportsMaxBudgetUsd: boolean;
 };
 
+// The boundary of the adapters/ subtree: this interface (plus the shared
+// data types alongside it) is the ONLY thing published outside the adapter
+// implementation files. CLI-specific implementations, caches, and live
+// catalogs (claude.ts, agy.ts, pi.ts) must not leak beyond it — outside code
+// goes through ./registry.ts and addresses adapters only via these members,
+// never by importing a specific adapter module or naming a CLI.
 export interface AgentCliAdapter {
   readonly name: string;
   // The binary to spawn (e.g. "claude"/"agy") — a CLI-intrinsic fact, same
@@ -104,6 +112,18 @@ export interface AgentCliAdapter {
   // Optional — adapters that don't ship with the user-callable aliases (e.g.
   // a future CLI that routes only version-resolved live ids) leave it off.
   availableIds?(): string[];
+  // Called on every pi session_start so the adapter can capture or warm live
+  // state from the session context (pi seeds its model registry; agy kicks
+  // off a model-catalog refresh). Optional — adapters with only static
+  // knowledge omit it. Callers iterate the host registry generically; no
+  // caller names a specific CLI.
+  startSession?(ctx: ExtensionContext): void;
+  // Opportunistically refresh this adapter's live model catalog (subprocess
+  // or registry lookup — the caller doesn't care) so model enumeration and
+  // routing reflect the CLI's current offering. Resolves even when the
+  // refresh fails (the adapter decides what a failure means for its own
+  // cache). Optional — adapters with a static catalog omit it.
+  refreshCatalog?(): Promise<void>;
   buildArgs(request: MinionRequest, config: MinionConfig): string[];
   environment(): NodeJS.ProcessEnv;
   parseLine(line: string): NormalizedEvent[];
