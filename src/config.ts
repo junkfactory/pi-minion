@@ -60,7 +60,8 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   if (
     !Array.isArray(config.allowedModels) ||
     !Array.isArray(config.allowedTools) ||
-    (config.blockedModels !== undefined && !Array.isArray(config.blockedModels))
+    (config.blockedModels !== undefined && !Array.isArray(config.blockedModels)) ||
+    (config.adapterArgs !== undefined && !isAdapterArgs(config.adapterArgs))
   ) {
     throw new Error(
       overrideText !== undefined
@@ -84,6 +85,17 @@ function modelMatchesPattern(model: string, pattern: string): boolean {
   return pattern.endsWith("*")
     ? model.startsWith(pattern.slice(0, -1))
     : model === pattern;
+}
+
+function isAdapterArgs(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every(
+      (entry) => Array.isArray(entry) && entry.every((item) => typeof item === "string")
+    )
+  );
 }
 
 export function isModelBlocked(

@@ -153,6 +153,13 @@ describe("buildArgs", () => {
     assert.ok(!args.includes("--tools"));
     assert.ok(!args.includes("--max-budget-usd"));
   });
+
+  it("spreads adapterArgs.pi just before the -- separator", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { pi: ["--verbose"] } }));
+    assert.equal(args[args.indexOf("--") - 1], "--verbose");
+    assert.equal(args[args.indexOf("--") + 1], "Explore the repo");
+    assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--verbose"));
+  });
 });
 
 describe("describeUnsupported", () => {

@@ -269,6 +269,12 @@ describe("buildArgs", () => {
     assert.ok(!args.includes("-p"));
     assert.equal(args[1], "--disable-slash-commands");
   });
+
+  it("appends adapterArgs.agy at the very end of the argv", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { agy: ["--flag", "v"] } }));
+    assert.deepEqual(args.slice(-2), ["--flag", "v"]);
+    assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--flag"));
+  });
 });
 
 describe("describeUnsupported", () => {

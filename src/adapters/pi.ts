@@ -82,7 +82,7 @@ export function ownsModel(model: string): boolean {
   );
 }
 
-export function buildArgs(request: MinionRequest, _config: MinionConfig): string[] {
+export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   // --mode json streams JSONL and exits once the prompt finishes (no -p
   // needed). --no-extensions keeps the child from loading pi-minion itself
   // (recursive minions) and any other user extension. "--" stops a task that
@@ -98,6 +98,7 @@ export function buildArgs(request: MinionRequest, _config: MinionConfig): string
     request.effort,
     "--append-system-prompt",
     MINION_PROMPT_BASE,
+    ...(config.adapterArgs?.pi ?? []),
     "--",
     resolveTaskText(request)
   ];

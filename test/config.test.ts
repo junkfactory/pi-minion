@@ -67,6 +67,63 @@ describe("loadConfig", () => {
     }
   });
 
+  it("passes adapterArgs through the merge", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: ["--flag", "val"] } }),
+        "utf8"
+      );
+      const config = await loadConfig(overridePath);
+      assert.deepEqual(config.adapterArgs, { pi: ["--flag", "val"] });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when adapterArgs is not an object", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ adapterArgs: "oops" }), "utf8");
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when an adapterArgs value is not an array", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: "--flag" } }),
+        "utf8"
+      );
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when an adapterArgs item is not a string", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: ["--flag", 3] } }),
+        "utf8"
+      );
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("ignores a leftover defaultEffort key from older override files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");

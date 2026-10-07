@@ -18,5 +18,10 @@
   "maxOutputBytes": 15000000,
   "maxResultPreviewBytes": 50000,
   "shortcut": "alt+j",
-  "showGlyphs": true
+  "showGlyphs": true,
+  "adapterArgs": {
+    "pi": [],
+    "claude": [],
+    "agy": []
+  }
 }

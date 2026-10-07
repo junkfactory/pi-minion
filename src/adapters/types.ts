@@ -15,6 +15,12 @@ export type MinionConfig = {
   maxResultPreviewBytes?: number;
   shortcut?: string;
   showGlyphs?: boolean;
+  // Extra CLI argv keyed by adapter name ("claude" | "agy" | "pi"). Each
+  // adapter spreads its own entry into buildArgs after its built-in flags,
+  // before the task positional/`--` separator. No dedup: a repeated
+  // built-in flag resolves whichever way the CLI's own parser reads last.
+  // Absent/empty = no extra args; replaced wholesale by user override.
+  adapterArgs?: Record<string, string[]>;
 };
 
 export type MinionRequest = {

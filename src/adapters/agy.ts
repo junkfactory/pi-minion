@@ -139,7 +139,7 @@ export function availableIds(): string[] {
   return [...deriveAliases(entries).map((cluster) => cluster.name), ...entries.map((entry) => entry.id)];
 }
 
-export function buildArgs(request: MinionRequest, _config: MinionConfig): string[] {
+export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   // agy has no --append-system-prompt/--system-prompt equivalent (confirmed
   // against `agy --help` — no prompt-related flag beyond --prompt itself, an
   // alias for --print) — the minion prompt is prepended to the task text
@@ -161,7 +161,8 @@ export function buildArgs(request: MinionRequest, _config: MinionConfig): string
     "--model",
     resolveModelAgainstCatalog(request.model, request.effort),
     "--effort",
-    request.effort
+    request.effort,
+    ...(config.adapterArgs?.agy ?? [])
   ];
 }
 

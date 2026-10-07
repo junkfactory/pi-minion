@@ -462,4 +462,11 @@ describe("buildArgs", () => {
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1];
     assert.match(systemPrompt, /no later turn to report back in/);
   });
+
+  it("spreads adapterArgs.claude just before the task positional", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { claude: ["--strict-mcp-config"] } }));
+    assert.equal(args.at(-1), "Explore the repo");
+    assert.equal(args.at(-2), "--strict-mcp-config");
+    assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--strict-mcp-config"));
+  });
 });
