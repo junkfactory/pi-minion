@@ -58,7 +58,7 @@ Confirm `startJob()` actually reached `jobUI.setJob(...)` — check
 `validateRequest()` didn't reject the request first (thrown errors there
 surface as a tool-call error, not a running job). Also check
 `~/.pi/agent/pi-minion/<id>/stderr.log` for a spawn-level failure (e.g.
-`command` not on `PATH`), and `~/.pi/agent/pi-minion.log` for a `started`
+`command` not on `PATH`), and `~/.pi/agent/pi-minion/pi-minion.log` for a `started`
 line with that job's id.
 
 **The widget shows nothing even though a job is genuinely running (job
@@ -73,7 +73,7 @@ again for the rest of the pi process, even for brand-new jobs. Fixed:
 call and on Pi's `session_start` event (fired right after every such
 replacement), and a failed registration attempt resets its own guard so
 the next call retries instead of giving up forever. If this recurs, check
-`~/.pi/agent/pi-minion.log` for a `started` line with no matching widget
+`~/.pi/agent/pi-minion/pi-minion.log` for a `started` line with no matching widget
 row, and suspect the same class of bug first — something making `ctx.ui.*`
 throw and go unnoticed.
 

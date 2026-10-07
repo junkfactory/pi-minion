@@ -3,7 +3,14 @@ import { describe, it } from "node:test";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { logJobEvent, rotateLogIfOversized } from "../src/log.js";
+import { logJobEvent, LOG_PATH, rotateLogIfOversized } from "../src/log.js";
+import { JOB_ROOT } from "../src/job-store.js";
+
+describe("LOG_PATH", () => {
+  it("points inside the job root, not beside it", () => {
+    assert.equal(LOG_PATH, join(JOB_ROOT, "pi-minion.log"));
+  });
+});
 
 describe("rotateLogIfOversized", () => {
   it("leaves the log alone when it's under the size cap", async () => {

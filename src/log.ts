@@ -1,11 +1,12 @@
 import { appendFile, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { JOB_ROOT } from "./job-store.js";
 
-// Sibling to JOB_ROOT, not inside it — a terse job-lifecycle log (started/
-// exited/errored/cancelled only, never stdout/stderr/UI events), rolled
-// over to one backup file once it would exceed MAX_LOG_BYTES.
-const LOG_PATH = join(dirname(JOB_ROOT), "pi-minion.log");
+// Inside JOB_ROOT, next to the job dirs — a terse job-lifecycle log
+// (started/exited/errored/cancelled only, never stdout/stderr/UI events),
+// rolled over to one backup file once it would exceed MAX_LOG_BYTES.
+// pruneOldJobs filters to directories, so the file is never pruned with them.
+export const LOG_PATH = join(JOB_ROOT, "pi-minion.log");
 const LOG_ROTATED_PATH = `${LOG_PATH}.1`;
 const MAX_LOG_BYTES = 15 * 1024 * 1024;
 

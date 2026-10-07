@@ -162,7 +162,7 @@ blank (see TROUBLESHOOTING.md if it ever doesn't).
 
 ### Records
 
-**Lifecycle log** — `~/.pi/agent/pi-minion.log` gets one terse line per job
+**Lifecycle log** — `~/.pi/agent/pi-minion/pi-minion.log` gets one terse line per job
 started/exited/errored/cancelled, schedule scheduled/skipped/unscheduled, and
 workflow started/finished/cancelled/declined — never stdout/stderr or UI
 events. Rolls over to `pi-minion.log.1` once it would exceed 15MB.

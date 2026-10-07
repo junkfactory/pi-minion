@@ -358,9 +358,13 @@ describe("startJob", () => {
 
     // Age the job's directory past the cutoff: pruning removes it, not the sessions.
     const old = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+    // The lifecycle log now lives in JOB_ROOT; directory pruning must skip it.
+    const logFile = join(JOB_ROOT, "pi-minion.log");
+    writeFileSync(logFile, "status=started job_id=probe model=x\n");
     utimesSync(join(JOB_ROOT, id), old, old);
     await pruneOldJobs(1);
     assert.ok(!existsSync(join(JOB_ROOT, id)), "job dir pruned");
+    assert.ok(existsSync(logFile), "plain file in JOB_ROOT survives pruning");
     assert.ok(existsSync(workflow.file!), "workflow session kept");
     assert.ok(existsSync(stepSession), "step session kept");
     assert.match(readFileSync(workflow.file!, "utf8"), /SUMMARY/);
