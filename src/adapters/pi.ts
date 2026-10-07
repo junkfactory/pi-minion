@@ -56,8 +56,9 @@ export function availableModelIds(): string[] {
 // pi's own syntax, which no other adapter accepts. Routing mirrors that with
 // a claim-only check against the available catalog (buildArgs passes the
 // model through, so pi still does the actual version resolution): an exact
-// bare id, a catalogued provider/id, or an alias some available id ends
-// with. claude-*/gemini-*/gpt-oss ids can appear in that catalog too (pi
+// bare id, a catalogued provider/id (bare or trailing alias — pi accepts
+// "opencode-go/luna" for gpt-6-luna, verified via `pi auth check`), or an
+// alias some available id ends with. claude-*/gemini-*/gpt-oss ids can appear in that catalog too (pi
 // routes those providers itself) — safe because the registry checks the
 // claude and agy adapters before this one. pi's own model matcher isn't
 // publicly exported (only ModelRuntime-bound resolvers are), so this stays a
@@ -70,10 +71,14 @@ export function ownsModel(model: string): boolean {
   const lower = model.toLowerCase();
   const slash = model.indexOf("/");
   if (slash !== -1) {
+    const provider = lower.slice(0, slash);
+    const alias = lower.slice(slash + 1);
     return available.some(
       (candidate) =>
-        candidate.provider.toLowerCase() === lower.slice(0, slash) &&
-        candidate.id.toLowerCase() === lower.slice(slash + 1)
+        candidate.provider.toLowerCase() === provider &&
+        // provider/alias too, mirroring the suffix match the bare-id path
+        // allows: pi resolves "opencode-go/luna" to gpt-6-luna itself.
+        (candidate.id.toLowerCase() === alias || candidate.id.toLowerCase().endsWith(`-${alias}`))
     );
   }
   return (

@@ -63,6 +63,15 @@ describe("ownsModel", () => {
     assert.equal(ownsModel("amazon-bedrock/global.anthropic.claude-opus-5-5"), false);
   });
 
+  it("claims provider/alias references pi itself resolves (opencode-go/luna → gpt-6-luna)", () => {
+    // pi accepts provider/alias (`pi auth check --model opencode-go/luna` →
+    // ready), so a bare `id ===` slash match would reject a model pi runs.
+    assert.equal(ownsModel("opencode-go/luna"), true);
+    assert.equal(ownsModel("opencode-go/gpt-6-luna"), true);
+    assert.equal(ownsModel("openai-codex/luna"), false);
+    assert.equal(ownsModel("opencode-go/sol"), false);
+  });
+
   it("claims short aliases a catalog id ends with (pi fuzzy-matches at spawn)", () => {
     assert.equal(ownsModel("luna"), true);
     assert.equal(ownsModel("sol"), true);

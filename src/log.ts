@@ -21,7 +21,10 @@ export type JobLogEvent =
   | "workflow_started"
   | "workflow_finished"
   | "workflow_cancelled"
-  | "workflow_declined";
+  | "workflow_declined"
+  // A workflow step rejected before spawn (validation/model-routing error);
+  // job_id is the step id since no job exists yet.
+  | "step_failed";
 
 // logPath/rotatedPath/maxBytes default to the real ~/.pi paths, overridable
 // so tests can exercise rotation against a temp dir (same rationale as

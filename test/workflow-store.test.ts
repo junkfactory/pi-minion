@@ -350,6 +350,18 @@ describe("workflow status helpers", () => {
     assert.match(text, /- verify: failed · luna$/m);
   });
 
+  it("shows a pre-spawn failure reason inline and drops the reportPath note when no step has one", () => {
+    const wf = fakeWorkflow();
+    wf.steps[0].status = "failed";
+    wf.steps[0].result = 'Unknown model "opencode-go/luna". Call help_pi_minion for the models usable here.';
+    wf.steps[1].status = "skipped";
+    delete wf.steps[0].reportPath;
+    const text = formatWorkflowSummary(wf);
+    assert.match(text, /- bugs: failed · sonnet · Unknown model "opencode-go\/luna"/);
+    assert.match(text, /- verify: skipped · luna$/m);
+    assert.doesNotMatch(text, /Read each step's reportPath/);
+  });
+
   it("formats the picker label with progress and running step ids", () => {
     assert.equal(formatWorkflowLabel(fakeWorkflow()), "⇉ Review MR · 1/2 steps · verify");
   });

@@ -424,9 +424,17 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     const cost = formatCostUsd(step.totalCostUsd).replaceAll("$", "\\$");
     return ` · ${formatTokenUsage(input, output, cacheWrite, cacheRead)} · ${cost}`;
   };
+  // No reportPath but a result (pre-spawn failure reason, or a result.md
+  // write that failed): show it inline so a failed step says why.
   const lines = wf.steps.map(
     (step) =>
-      `- ${step.id}: ${step.status} · ${step.model}${stats(step)}${step.reportPath ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})` : ""}`
+      `- ${step.id}: ${step.status} · ${step.model}${stats(step)}${
+        step.reportPath
+          ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})`
+          : step.result
+            ? ` · ${step.result.replaceAll("\n", " ").slice(0, 300)}`
+            : ""
+      }`
   );
   return [
     `## Pi minion workflow ${status}: ${wf.title}`,
@@ -434,8 +442,9 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     counts,
     "",
     ...lines,
-    "",
-    "Read each step's reportPath for its full result.",
+    ...(wf.steps.some((step) => step.reportPath)
+      ? ["", "Read each step's reportPath for its full result."]
+      : []),
     ...(note ? ["", `**Schedule stopped:** ${note}`] : []),
     ...(alert ? ["", `**Needs attention:** ${alert}`] : [])
   ].join("\n");

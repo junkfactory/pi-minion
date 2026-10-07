@@ -26,7 +26,15 @@ import {
   type WorkflowStep
 } from "./workflow-store.js";
 
-export type StepOutcome = { finalResult?: string; reportPath?: string; ok: boolean } & Partial<StepRunStats>;
+export type StepOutcome = {
+  finalResult?: string;
+  reportPath?: string;
+  // Why a pre-spawn failure never produced a finalResult (e.g.
+  // validateRequest or resolveAdapterForModel throwing); stored on the step
+  // and rendered into the workflow summary.
+  errorReason?: string;
+  ok: boolean;
+} & Partial<StepRunStats>;
 
 // Everything the runner touches outside its own workflow record, injected so
 // tests can drive it without spawning processes.
@@ -153,7 +161,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     // A cancelled step's job still exits and reports; ignore it.
     if (step.status !== "running") return;
     step.status = outcome.ok ? "done" : "failed";
-    step.result = outcome.finalResult;
+    step.result = outcome.finalResult ?? outcome.errorReason;
     step.reportPath = outcome.reportPath;
     step.startedAt = outcome.startedAt;
     step.finishedAt = outcome.finishedAt;
@@ -185,7 +193,17 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
         deps.stopStep(jobId);
       }
     },
-    () => settle({ ok: false })
+    (error) => {
+      // Cancelled while starting: settle's guard would ignore it, and a
+      // cancellation isn't a failure to report.
+      if (step.status !== "running") return;
+      // Pre-spawn failures (validateRequest / resolveAdapterForModel) have
+      // no job, no report, no log line — record the reason on the step and
+      // in the job log so a failed step says why instead of bare "failed".
+      const reason = error instanceof Error ? error.message : String(error);
+      deps.log("step_failed", { id: step.id, model: step.model, detail: `error="${reason.replaceAll('"', "'")}"` });
+      settle({ ok: false, errorReason: reason });
+    }
   );
 }
 

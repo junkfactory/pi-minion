@@ -37,6 +37,7 @@ function harness(stepSpecs: Array<{ id: string; dependsOn?: string[]; task?: str
   const stopped: string[] = [];
   const titles: string[] = [];
   const widgetCalls: string[] = [];
+  const logs: Array<{ event: string; info: { id: string; model: string; detail?: string } }> = [];
   let failNext = false;
   const deps: WorkflowDeps = {
     startStep: async (request, _wf, settle, step) => {
@@ -56,11 +57,11 @@ function harness(stepSpecs: Array<{ id: string; dependsOn?: string[]; task?: str
         clearWorkflow: () => widgetCalls.push("clear")
       }) as any,
     post: (_session, content, _details, triggerTurn) => posts.push({ content, triggerTurn }),
-    log: () => {}
+    log: (event, info) => logs.push({ event, info })
   };
   const flush = () => new Promise((resolve) => setImmediate(resolve));
   const ok = (result: string): StepOutcome => ({ ok: true, finalResult: result, reportPath: `/r/${result}.md` });
-  return { wf, deps, titles, started, posts, stopped, widgetCalls, flush, ok, failNext: () => (failNext = true) };
+  return { wf, deps, titles, started, posts, stopped, widgetCalls, logs, flush, ok, failNext: () => (failNext = true) };
 }
 
 afterEach(() => workflows.clear());
@@ -158,6 +159,13 @@ describe("startWorkflow", () => {
     startWorkflow("wf", h.deps);
     await h.flush();
     assert.deepEqual(h.wf.steps.map((s) => s.status), ["failed", "skipped"]);
+    // The pre-spawn rejection reason is recorded on the step and logged, so
+    // the summary says why instead of a bare "failed".
+    assert.equal(h.wf.steps[0].result, "spawn failed");
+    const stepFailures = h.logs.filter((l) => l.event === "step_failed");
+    assert.equal(stepFailures.length, 1);
+    assert.equal(stepFailures[0].info.id, "a");
+    assert.match(stepFailures[0].info.detail ?? "", /spawn failed/);
     assert.equal(h.posts.length, 1);
   });
 
