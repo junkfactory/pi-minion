@@ -46,7 +46,7 @@ const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, 
 const { startWorkflowSession } = await import("../src/child-session.js");
 
 type Post = { content: string; triggerTurn: boolean };
-type Outcome = { finalResult?: string; reportPath?: string; ok: boolean } & Partial<StepRunStats>;
+type Outcome = { finalResult?: string; reportPath?: string; errorReason?: string; ok: boolean } & Partial<StepRunStats>;
 
 let sessionCounter = 0;
 function newSession() {
@@ -157,6 +157,8 @@ describe("startJob", () => {
     assert.equal(outcomes[0].finalResult, undefined);
     assert.equal(jobMeta.get(id)?.status, "errored");
     assert.deepEqual(posts, []);
+    // The failure message flows to the workflow step (its post is suppressed).
+    assert.match(outcomes[0].errorReason ?? "", /Pi minion failed \(exit 3\)/);
     // Diagnostics still land on disk even though nothing posts.
     assert.match(readFileSync(join(JOB_ROOT, id, "stderr.log"), "utf8"), /boom on stderr/);
   });
@@ -185,6 +187,7 @@ describe("startJob", () => {
         assert.equal(outcomes[0].ok, false);
         assert.deepEqual(posts, []);
         assert.equal(jobMeta.get(id)?.status, "errored");
+        assert.match(outcomes[0].errorReason ?? "", /was not found on PATH/);
         assert.equal(jobs.get(id), undefined);
       }));
 
@@ -211,6 +214,7 @@ describe("startJob", () => {
     assert.equal(outcomes[0].ok, false);
     assert.equal(outcomes[0].finalResult, undefined);
     assert.equal(jobMeta.get(id)?.status, "errored");
+    assert.match(outcomes[0].errorReason ?? "", /exited without producing a result/);
   });
 
   it("a mid-run cancellation keeps status cancelled after the process closes", async () => {

@@ -169,6 +169,16 @@ describe("startWorkflow", () => {
     assert.equal(h.posts.length, 1);
   });
 
+  it("stores a spawned failure's reason on the step for the summary", async () => {
+    const h = harness([{ id: "a" }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({ ok: false, errorReason: "Pi minion failed (exit 1)." });
+    await h.flush();
+    assert.equal(h.wf.steps[0].status, "failed");
+    assert.equal(h.wf.steps[0].result, "Pi minion failed (exit 1).");
+  });
+
   it("never runs more than MAX_PARALLEL_STEPS at once", async () => {
     const h = harness(Array.from({ length: 6 }, (_, i) => ({ id: `s${i}` })));
     startWorkflow("wf", h.deps);

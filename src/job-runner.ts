@@ -99,7 +99,7 @@ export async function startJob(
   // suppresses the end-of-job post entirely (the workflow posts one summary
   // with each step's status, usage and report). `ok` is a clean exit with a
   // final result.
-  onSettled?: (outcome: { finalResult?: string; reportPath?: string; ok: boolean } & StepRunStats) => void,
+  onSettled?: (outcome: { finalResult?: string; reportPath?: string; errorReason?: string; ok: boolean } & StepRunStats) => void,
   // Workflow steps only. `title` ("<workflow title> › <step id>") replaces
   // the title derived from the task (picker, modal) and is added to the result
   // frontmatter; the child session is named by `id`, since /resume already
@@ -294,7 +294,7 @@ export async function startJob(
   // Both exit paths end here, in a finally: onSettled must fire exactly once
   // even if the path's own work threw, or the workflow would never move on.
   let settled = false;
-  const settle = (outcome: { finalResult?: string; reportPath?: string; ok: boolean }) => {
+  const settle = (outcome: { finalResult?: string; reportPath?: string; errorReason?: string; ok: boolean }) => {
     if (settled) return;
     settled = true;
     // The same tokens the live widget row showed, falling back to the final
@@ -357,6 +357,9 @@ export async function startJob(
     let reportPath: string | undefined;
     let outputError: Error | undefined;
     let clean = false;
+    // Failure text for the workflow step (a step's post is suppressed, so
+    // describeJobResult's message would otherwise reach nobody).
+    let failureReason: string | undefined;
     try {
       output.flush();
       clearJobViews(jobUI, id);
@@ -408,6 +411,7 @@ export async function startJob(
             rawOutputHint: adapter.rawOutputHint,
             modelError: runError
           });
+      if (!clean) failureReason = result;
       try {
         // Best-effort, like result.md: a failed session write mustn't lose the result.
         writeChildSession({
@@ -448,7 +452,7 @@ export async function startJob(
         !onFinalResult || finalNote !== ""
       );
     } finally {
-      settle({ finalResult, reportPath, ok: clean });
+      settle({ finalResult, reportPath, ok: clean, errorReason: failureReason });
     }
   });
 
@@ -460,6 +464,7 @@ export async function startJob(
       )
     )
       return;
+    let failureReason: string | undefined;
     try {
       markJobFinished(id, "errored");
       clearJobViews(jobUI, id);
@@ -469,14 +474,15 @@ export async function startJob(
         (error as NodeJS.ErrnoException).code === "ENOENT"
           ? `\n\n**${adapter.command}** was not found on PATH. ${adapter.installHint}`
           : "";
+      failureReason = `Pi minion failed: ${error.message}${
+        outputError ? `\nOutput capture failed: ${outputError.message}` : ""
+      }${notFoundHint}`;
       postResult(
-        `${frontmatter()}\n\nPi minion failed: ${error.message}${
-          outputError ? `\nOutput capture failed: ${outputError.message}` : ""
-        }${notFoundHint}\n\n---`,
+        `${frontmatter()}\n\n${failureReason}\n\n---`,
         { id, jobDir }
       );
     } finally {
-      settle({ ok: false });
+      settle({ ok: false, errorReason: failureReason });
     }
   });
 
