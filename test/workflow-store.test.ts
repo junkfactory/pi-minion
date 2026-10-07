@@ -340,6 +340,16 @@ describe("workflow status helpers", () => {
     assert.match(text, /- verify: failed · luna$/m);
   });
 
+  it("adds token usage and cost to a step's line when it reported usage", () => {
+    const wf = fakeWorkflow();
+    wf.steps[1].status = "failed";
+    wf.steps[0].tokenUsage = { input: 15_900, output: 3_700, cacheWrite: 0, cacheRead: 96_400 };
+    wf.steps[0].totalCostUsd = 0.0049;
+    const text = formatWorkflowSummary(wf);
+    assert.ok(text.includes("- bugs: done · sonnet · ↑15.9K ↓3.7K →0.0K ←96.4K · \\$0.0049 · [/r/bugs.md](file:///r/bugs.md)"));
+    assert.match(text, /- verify: failed · luna$/m);
+  });
+
   it("formats the picker label with progress and running step ids", () => {
     assert.equal(formatWorkflowLabel(fakeWorkflow()), "⇉ Review MR · 1/2 steps · verify");
   });

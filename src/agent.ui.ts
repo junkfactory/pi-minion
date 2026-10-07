@@ -70,7 +70,14 @@ export type JobStatusUpdate = {
 
 // What a finished step's row keeps from its job, so it reads like the live
 // row did: tokens, and elapsed time frozen at finishedAt.
-export type StepRunStats = { startedAt: number; finishedAt: number; tokenUsage?: TokenCounts };
+export type StepRunStats = {
+  startedAt: number;
+  finishedAt: number;
+  tokenUsage?: TokenCounts;
+  // Final billed cost, when the CLI reported one; undefined for a CLI with
+  // no cost concept (formatCostUsd renders that as "n/a").
+  totalCostUsd?: number;
+};
 
 export type WorkflowStepStatus = "pending" | "running" | "done" | "failed" | "skipped" | "cancelled";
 

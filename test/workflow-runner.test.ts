@@ -111,6 +111,23 @@ describe("startWorkflow", () => {
     assert.equal(h.widgetCalls.at(-1), "clear");
   });
 
+  it("puts each step's token usage and cost on its summary line only when it reported usage", async () => {
+    const h = harness([{ id: "a" }, { id: "b", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({
+      ...h.ok("A"),
+      tokenUsage: { input: 15_900, output: 3_700, cacheWrite: 0, cacheRead: 96_400 },
+      totalCostUsd: 0.0049
+    });
+    await h.flush();
+    h.started[1].settle(h.ok("B"));
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    assert.ok(h.posts[0].content.includes("- a: done · sonnet · ↑15.9K ↓3.7K →0.0K ←96.4K · \\$0.0049 · [/r/A.md](file:///r/A.md)"));
+    assert.ok(h.posts[0].content.includes("- b: done · sonnet · [/r/B.md](file:///r/B.md)"));
+  });
+
   it("skips dependents of a failed step but keeps independent branches going", async () => {
     const h = harness([
       { id: "a" },

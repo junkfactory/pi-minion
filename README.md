@@ -105,9 +105,9 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   on "No"; declining runs nothing, and a session without a UI refuses.
 - The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
   on pi or agy are marked "no cost ceiling" and counted separately.
-- Each step posts only a short stub (frontmatter and report link) quietly;
-  one summary at the end (per-step status, model, `reportPath`) starts the
-  single main-agent turn.
+- Steps post no end-of-job message; one summary at the end (per-step status,
+  model, `token_usage`, `cost_usd`, `reportPath`) starts the single main-agent
+  turn.
 - A failed, skipped, or cancelled step skips its dependents while independent
   branches keep going.
 

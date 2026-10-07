@@ -79,7 +79,7 @@ export const PI_MINION_USAGE_NOTES = [
   "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd.",
   "model must be one of `models` above — already filtered to what's installed on this machine.",
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
-  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Step results post quietly and one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
+  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
   "schedule_pi_minion_workflow takes run_pi_minion_workflow's fields plus a cron expression; the user approves once when it is scheduled, then each tick starts a fresh run (skipped while the previous run is still going) whose summary posts quietly. It needs exactly one final step (one no other step depends on); only that step may end the schedule by finishing its reply with the stop marker; stop it with cancel_pi_minion_schedule (a run in progress is cancelled separately with cancel_pi_minion_workflow and the schedule's lastWorkflowId)."
 ];
 
@@ -555,7 +555,7 @@ export function registerTools(pi: ExtensionAPI): void {
     name: "run_pi_minion_workflow",
     label: "Run Pi Minion Workflow",
     description:
-      "Run several pi-minion steps as a dependency graph in the background: steps with no unfinished dependencies run in parallel (up to 4 at once), and a step can embed an earlier step's output with {{steps.<id>.result}}. The user approves the plan in a confirm dialog first. Each step's result posts to this transcript quietly; one summary at the end starts a turn. Returns at once with the workflow id.",
+      "Run several pi-minion steps as a dependency graph in the background: steps with no unfinished dependencies run in parallel (up to 4 at once), and a step can embed an earlier step's output with {{steps.<id>.result}}. The user approves the plan in a confirm dialog first. Steps post no result of their own; one summary at the end starts a turn. Returns at once with the workflow id.",
     promptSnippet: "Run a multi-step pi-minion workflow (parallel steps, then verify/synthesize)",
     promptGuidelines: [
       "Propose a workflow when the task naturally splits into 2 or more independent subtasks, or a produce→verify / research→synthesize chain. In the proposal, list the steps, their models, and the budget. Call run_pi_minion_workflow only after the user agrees.",
@@ -583,7 +583,7 @@ export function registerTools(pi: ExtensionAPI): void {
       );
       startWorkflow(id, deps);
       return textResult(
-        `Workflow ${id} "${request.title}" started with ${request.steps.length} steps. Step results post to this transcript quietly; one summary posts when all finish. Track it only with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll.`,
+        `Workflow ${id} "${request.title}" started with ${request.steps.length} steps. No per-step results post; one summary posts when all finish. Track it only with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll.`,
         { id }
       );
     }

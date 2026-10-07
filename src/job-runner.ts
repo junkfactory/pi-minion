@@ -95,10 +95,10 @@ export async function startJob(
   // failure); a returned note is appended to the posted result. Passing it
   // also makes the post quiet (no main-agent turn) unless a note comes back.
   onFinalResult?: (finalResult: string | undefined) => string | undefined,
-  // Workflow steps only. Called once on either exit path, right after the
-  // result posts; passing it makes both posts quiet (no main-agent turn),
-  // since the workflow posts one summary at the end. `ok` is a clean exit
-  // with a final result.
+  // Workflow steps only. Called once on either exit path; passing it
+  // suppresses the end-of-job post entirely (the workflow posts one summary
+  // with each step's status, usage and report). `ok` is a clean exit with a
+  // final result.
   onSettled?: (outcome: { finalResult?: string; reportPath?: string; ok: boolean } & StepRunStats) => void,
   // Workflow steps only. `title` ("<workflow title> › <step id>") replaces
   // the title derived from the task (picker, modal) and is added to the result
@@ -294,7 +294,7 @@ export async function startJob(
     // totals for a CLI that only reports usage at the end.
     const tokenUsage = runningTokens ?? (finalUsage && tokenCountsFromUsage(finalUsage));
     try {
-      onSettled?.({ ...outcome, startedAt, finishedAt: Date.now(), tokenUsage });
+      onSettled?.({ ...outcome, startedAt, finishedAt: Date.now(), tokenUsage, totalCostUsd: finalUsage?.totalCostUsd });
     } catch {}
   };
   // Shared first step of both exit paths: runs once, stops timers, logs, and
@@ -328,11 +328,14 @@ export async function startJob(
     details: Record<string, unknown>,
     triggerTurn = true
   ) => {
+    // A workflow step posts nothing at its end: the workflow's one summary
+    // carries each step's status, usage, cost and report. Registry cleanup
+    // still runs here on every path — jobs.get(id) must not report "not
+    // found" while the job is still finalizing its result.
     // Owner looked up now, not at start: the session may have been replaced
     // (rehomed) or quit since.
-    postToSession(jobMeta.get(id)?.sessionId ?? sessionId, content, details, triggerTurn);
-    // Deleted last, after the result has posted — jobs.get(id) must not
-    // report "not found" while the job is still finalizing its result.
+    if (!onSettled)
+      postToSession(jobMeta.get(id)?.sessionId ?? sessionId, content, details, triggerTurn);
     jobs.delete(id);
   };
 
@@ -408,11 +411,8 @@ export async function startJob(
         const note = onFinalResult?.(finalResult);
         if (note) finalNote = `\n\n**Schedule stopped:** ${note}`;
       } catch {}
-      // A workflow step's result is already on disk and its summary links the
-      // report, so the main session gets a stub rather than the full text.
-      const posted = onSettled && reportPath ? "Step finished; its full result is in the report above." : result;
       postResult(
-        `${frontmatter(reportPath)}${denialWarning}${capabilityWarning}${modelListNote}\n\n${posted}${finalNote}\n\n---`,
+        `${frontmatter(reportPath)}${denialWarning}${capabilityWarning}${modelListNote}\n\n${result}${finalNote}\n\n---`,
         {
           id,
           code,
@@ -421,7 +421,7 @@ export async function startJob(
           permissionDenied: sawPermissionDenial,
           ...usageFields(finalUsage)
         },
-        (!onFinalResult && !onSettled) || finalNote !== ""
+        !onFinalResult || finalNote !== ""
       );
       clean = code === 0 && !timedOut && !output.exceededOutputLimit && !outputError && finalResult !== undefined;
     } finally {
@@ -450,8 +450,7 @@ export async function startJob(
         `${frontmatter()}\n\nPi minion failed: ${error.message}${
           outputError ? `\nOutput capture failed: ${outputError.message}` : ""
         }${notFoundHint}\n\n---`,
-        { id, jobDir },
-        !onSettled
+        { id, jobDir }
       );
     } finally {
       settle({ ok: false });

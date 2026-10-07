@@ -8,7 +8,8 @@ import type {
   WorkflowStepStatus,
   WorkflowWidgetStatus
 } from "./agent.ui.js";
-import { deriveJobTitle, truncateResultForContext } from "./format.js";
+import { formatTokenUsage } from "./agent.ui.js";
+import { deriveJobTitle, formatCostUsd, truncateResultForContext } from "./format.js";
 import { glyph } from "./glyphs.js";
 import type { WorkflowSession } from "./child-session.js";
 import { jobMeta } from "./job-store.js";
@@ -408,8 +409,8 @@ export function workflowStatus(wf: Pick<MinionWorkflow, "cancelled" | "steps">):
   return wf.steps.every((step) => step.status === "done") ? "done" : "failed";
 }
 
-// The workflow's single end-of-run post: one line per step, pointing the
-// agent at each reportPath rather than inlining results.
+// The workflow's single end-of-run post: one line per step with its status,
+// model, usage, cost and reportPath link rather than inlined results.
 export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?: string): string {
   const status = workflowStatus(wf);
   const counts = (["done", "failed", "skipped", "cancelled"] as const)
@@ -417,9 +418,15 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     .filter(([, n]) => n > 0)
     .map(([name, n]) => `${n} ${name}`)
     .join(", ");
+  const stats = (step: WorkflowStep): string => {
+    if (!step.tokenUsage) return "";
+    const { input, output, cacheWrite, cacheRead } = step.tokenUsage;
+    const cost = formatCostUsd(step.totalCostUsd).replaceAll("$", "\\$");
+    return ` · ${formatTokenUsage(input, output, cacheWrite, cacheRead)} · ${cost}`;
+  };
   const lines = wf.steps.map(
     (step) =>
-      `- ${step.id}: ${step.status} · ${step.model}${step.reportPath ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})` : ""}`
+      `- ${step.id}: ${step.status} · ${step.model}${stats(step)}${step.reportPath ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})` : ""}`
   );
   return [
     `## Pi minion workflow ${status}: ${wf.title}`,

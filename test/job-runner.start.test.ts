@@ -98,7 +98,7 @@ describe("startJob", () => {
     assert.match(notes[0], /started/);
   });
 
-  it("workflow step posts a quiet stub and settles once with ok", async () => {
+  it("workflow step posts nothing at its end and settles once with ok", async () => {
     const { sessionId, posts } = newSession();
     const notes: string[] = [];
     const outcomes: Outcome[] = [];
@@ -106,12 +106,9 @@ describe("startJob", () => {
       request("ok"), workspace, sessionId, undefined, (m) => notes.push(m), fakeUI,
       undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1", workflowId: "wf" }
     );
-    await waitFor(() => outcomes.length > 0 && posts.length > 0);
-    assert.equal(posts.length, 1);
-    assert.equal(posts[0].triggerTurn, false);
-    assert.match(posts[0].content, /---\nmodel: [\s\S]*?\nstep: wf › step1\n[\s\S]*?\n---\n/);
-    assert.match(posts[0].content, /Step finished; its full result is in the report above\./);
-    assert.doesNotMatch(posts[0].content, /FINAL ANSWER/);
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(posts, []);
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0].ok, true);
     assert.equal(outcomes[0].finalResult, "FINAL ANSWER");
@@ -121,22 +118,25 @@ describe("startJob", () => {
     // What the finished step's widget row keeps: run time and tokens.
     assert.ok(outcomes[0].startedAt! <= outcomes[0].finishedAt!);
     assert.ok(outcomes[0].tokenUsage, "expected token usage from the run");
+    assert.equal(outcomes[0].totalCostUsd, 0.01);
+    assert.equal(jobs.get(id), undefined);
   });
 
   it("workflow step exiting non-zero without a result settles not-ok with full diagnostics", async () => {
     const { sessionId, posts } = newSession();
     const outcomes: Outcome[] = [];
-    await startJob(
+    const id = await startJob(
       request("fail"), workspace, sessionId, undefined, noop, fakeUI,
       undefined, (o) => outcomes.push(o), { title: "wf › bad", id: "bad", workflowId: "wf" }
     );
-    await waitFor(() => outcomes.length > 0 && posts.length > 0);
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0].ok, false);
     assert.equal(outcomes[0].finalResult, undefined);
-    assert.equal(posts[0].triggerTurn, false);
-    assert.doesNotMatch(posts[0].content, /Step finished/);
-    assert.match(posts[0].content, /boom on stderr/);
+    assert.deepEqual(posts, []);
+    // Diagnostics still land on disk even though nothing posts.
+    assert.match(readFileSync(join(JOB_ROOT, id, "stderr.log"), "utf8"), /boom on stderr/);
   });
 
   describe("spawn error (binary missing)", () => {
@@ -149,7 +149,7 @@ describe("startJob", () => {
       }
     };
 
-    it("with onSettled: settles once not-ok and posts quietly", () =>
+    it("with onSettled: settles once not-ok and posts nothing", () =>
       withoutClaude(async () => {
         const { sessionId, posts } = newSession();
         const outcomes: Outcome[] = [];
@@ -157,13 +157,13 @@ describe("startJob", () => {
           request("ok"), workspace, sessionId, undefined, noop, fakeUI,
           undefined, (o) => outcomes.push(o), { title: "wf › missing", id: "missing", workflowId: "wf" }
         );
-        await waitFor(() => outcomes.length > 0 && posts.length > 0);
+        await waitFor(() => outcomes.length > 0);
+        await new Promise((resolve) => setImmediate(resolve));
         assert.equal(outcomes.length, 1);
         assert.equal(outcomes[0].ok, false);
-        assert.equal(posts[0].triggerTurn, false);
-        assert.match(posts[0].content, /Pi minion failed/);
-        assert.match(posts[0].content, /not found on PATH/);
+        assert.deepEqual(posts, []);
         assert.equal(jobMeta.get(id)?.status, "errored");
+        assert.equal(jobs.get(id), undefined);
       }));
 
     it("without onSettled: triggers a turn", () =>
@@ -196,7 +196,7 @@ describe("startJob", () => {
   });
 
   it("threads a step's session under its workflow session, and job pruning leaves both sessions alone", async () => {
-    const { sessionId, posts } = newSession();
+    const { sessionId } = newSession();
     const sessionsDir = join(home, ".pi", "agent", "sessions", "start-test");
     mkdirSync(sessionsDir, { recursive: true });
     const parent = join(sessionsDir, "parent.jsonl");
@@ -206,7 +206,7 @@ describe("startJob", () => {
       request("ok"), workspace, sessionId, workflow.file, noop, fakeUI,
       undefined, (o) => outcomes.push(o), { title: "wf › step1", id: "step1", workflowId: "wf" }
     );
-    await waitFor(() => outcomes.length > 0 && posts.length > 0);
+    await waitFor(() => outcomes.length > 0);
     workflow.finish("SUMMARY");
     const header = (file: string) => JSON.parse(readFileSync(file, "utf8").split("\n")[0]);
     const stepSession = readdirSync(sessionsDir)

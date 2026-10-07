@@ -158,6 +158,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     step.startedAt = outcome.startedAt;
     step.finishedAt = outcome.finishedAt;
     step.tokenUsage = outcome.tokenUsage;
+    step.totalCostUsd = outcome.totalCostUsd;
     if (outcome.ok && wf.scheduled && terminalStepIds(wf.steps).has(step.id) && hasStopMarker(outcome.finalResult)) {
       wf.stopRequested = true;
     }
