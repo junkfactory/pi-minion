@@ -27,6 +27,10 @@ echo run >> "$HOME/spawned"
 echo "LANG=\${LANG:-unset}" >> "$HOME/langprobe"
 case "$last" in
   *MODE:fail*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; echo "boom on stderr" >&2; exit 3 ;;
+  *MODE:argv*) printf '%s\n' "$@" > "$HOME/argv.txt"
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     echo '{"type":"result","result":"ARGS OK","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
+     exit 0 ;;
   *MODE:empty*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exit 0 ;;
   *MODE:slow*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exec sleep 30 ;;
   *) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
@@ -110,13 +114,32 @@ describe("startJob", () => {
     process.env.LANG = "SENTINEL_PREEXEC";
     try {
       const { sessionId, posts } = newSession();
-      await startJob(request("ok"), workspace, sessionId, undefined, noop, fakeUI);
+      await startJob(request("argv"), workspace, sessionId, undefined, noop, fakeUI);
       await waitFor(() => posts.length > 0);
       assert.equal(readFileSync(join(home, "langprobe"), "utf8").trim().split("\n").at(-1), "LANG=unset");
+      // env re-execs claude with claude as argv[0] (the shebang discards it),
+      // so the captured $@ starts at claude's own first flag — the wrapper
+      // chain delivered the command with no stray tokens before its flags.
+      const argv = readFileSync(join(home, "argv.txt"), "utf8").trim().split("\n");
+      assert.match(argv[0] ?? "", /^-/);
+      assert.match(argv.at(-1) ?? "", /MODE:argv/);
     } finally {
       process.env.LANG = prevLang;
       rmSync(override, { force: true });
     }
+  });
+
+  it("without preExec the adapter command is not injected as a stray argv entry", async () => {
+    const { sessionId, posts } = newSession();
+    await startJob(request("argv"), workspace, sessionId, undefined, noop, fakeUI);
+    await waitFor(() => posts.length > 0);
+    const argv = readFileSync(join(home, "argv.txt"), "utf8").trim().split("\n");
+    // Regression: the default (empty preExec) spawn used to prepend
+    // adapter.command, and claude read that stray "claude" positional as
+    // the whole prompt ("Your message was just claude").
+    assert.equal(argv.includes("claude"), false);
+    assert.match(argv[0] ?? "", /^-/);
+    assert.match(argv.at(-1) ?? "", /MODE:argv/);
   });
 
   it("workflow step posts nothing at its end and settles once with ok", async () => {

@@ -147,7 +147,12 @@ export async function startJob(
       }
       const args = adapter.buildArgs(validRequest, config);
       const preExec = config.adapterArgs?.[adapter.command]?.preExec ?? [];
-      return spawn(preExec[0] ?? adapter.command, [...preExec.slice(1), adapter.command, ...args], {
+      // Only a wrapper needs adapter.command inside argv — the wrapper execs
+      // it as its program. Without a preExec, prepending it would inject a
+      // stray positional before the real flags (claude read "claude" as the
+      // prompt); the spawn's first argument already IS the command.
+      const [wrapper, ...wrapperArgs] = preExec;
+      return spawn(wrapper ?? adapter.command, [...wrapperArgs, ...(wrapper ? [adapter.command] : []), ...args], {
         cwd: validRequest.workspace,
         env: adapter.environment(),
         shell: false,
