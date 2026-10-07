@@ -1,5 +1,17 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+// Normalized per-adapter argv config. Raw JSON (base or user override)
+// accepts either a bare string[] (args only) or an object with optional
+// "args"/"preExec"; loadConfig normalizes both shapes here so consumers
+// never branch. args = extra CLI argv appended after an adapter's
+// built-in flags (before the task positional/`--`), no dedup. preExec =
+// wrapper argv prefixed at spawn: spawn(preExec[0],
+// [...preExec.slice(1), adapter.command, ...args]) with shell:false, so
+// ["env","-u","AWS_PROFILE"] runs the adapter under env(1). Absent/empty
+// preExec = spawn the adapter directly (today's behavior). The whole
+// adapterArgs map is replaced wholesale by a user override.
+export type AdapterArgs = { args: string[]; preExec: string[] };
+
 export type MinionConfig = {
   allowedModels: string[];
   // Denylist taking precedence over allowedModels. Entries are exact model
@@ -15,12 +27,7 @@ export type MinionConfig = {
   maxResultPreviewBytes?: number;
   shortcut?: string;
   showGlyphs?: boolean;
-  // Extra CLI argv keyed by adapter name ("claude" | "agy" | "pi"). Each
-  // adapter spreads its own entry into buildArgs after its built-in flags,
-  // before the task positional/`--` separator. No dedup: a repeated
-  // built-in flag resolves whichever way the CLI's own parser reads last.
-  // Absent/empty = no extra args; replaced wholesale by user override.
-  adapterArgs?: Record<string, string[]>;
+  adapterArgs?: Record<string, AdapterArgs>;
 };
 
 export type MinionRequest = {
@@ -66,6 +73,10 @@ export type UsageTotals = {
 export type NormalizedEvent =
   | { kind: "permissionDenied" }
   | { kind: "result"; result: string }
+  // The CLI reported the final turn failed (e.g. pi's message_end with
+  // stopReason "error" carrying errorMessage): the run ends with no result
+  // and this is the reason to surface in the job's failure text.
+  | { kind: "error"; message: string }
   // The concrete model id the CLI resolved the requested alias to (e.g.
   // "opus" -> "claude-opus-5-5"), reported once at session start.
   | { kind: "model"; model: string }

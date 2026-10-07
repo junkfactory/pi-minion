@@ -98,7 +98,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     request.effort,
     "--append-system-prompt",
     MINION_PROMPT_BASE,
-    ...(config.adapterArgs?.pi ?? []),
+    ...(config.adapterArgs?.pi?.args ?? []),
     "--",
     resolveTaskText(request)
   ];
@@ -132,6 +132,7 @@ type PiMessage = {
   responseModel?: unknown;
   usage?: PiUsage;
   stopReason?: unknown;
+  errorMessage?: unknown;
 };
 
 type PiEvent = {
@@ -233,6 +234,16 @@ export function parseLine(line: string): NormalizedEvent[] {
     // follows, "error"/"aborted" leave the job without one.
     if (message.stopReason === "stop" && text !== undefined) {
       events.push({ kind: "result", result: text });
+    } else if (message.stopReason === "error") {
+      // The turn failed (provider/credential/config error): surface the
+      // reason so the job's failure text isn't just "no result".
+      events.push({
+        kind: "error",
+        message:
+          typeof message.errorMessage === "string" && message.errorMessage
+            ? message.errorMessage
+            : "the model turn failed before producing a result"
+      });
     }
   } else if (parsed.type === "tool_execution_start") {
     if (typeof parsed.toolCallId === "string" && typeof parsed.toolName === "string") {

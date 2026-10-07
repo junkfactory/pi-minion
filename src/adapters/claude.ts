@@ -52,7 +52,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     MINION_PROMPT_BASE,
     "--effort",
     request.effort,
-    ...(config.adapterArgs?.claude ?? []),
+    ...(config.adapterArgs?.claude?.args ?? []),
     task
   ];
 }

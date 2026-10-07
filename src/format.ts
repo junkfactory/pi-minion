@@ -65,11 +65,16 @@ export function describeJobResult(outcome: {
   stdoutPath: string;
   // The adapter's rawOutputHint — how to read stdoutPath's format.
   rawOutputHint: string;
+  // Reason from the CLI's streamed error event, when the run failed without
+  // a result (pi's message_end stopReason "error"). Surfaced inline so the
+  // failure text doesn't stop at "no result".
+  modelError?: string;
 }): string {
   // Both partial-output cases point at stdoutPath instead of reading it back
   // and inlining what could be megabytes of recovered text into the caller's
   // context — they can grep/read it themselves if they need it.
   const partialOutputHint = `Output captured before the cutoff is at ${outcome.stdoutPath} — ${outcome.rawOutputHint} Read it directly if you need the partial output.`;
+  const modelErrorLine = outcome.modelError ? `\nModel error: ${outcome.modelError}` : "";
   if (outcome.exceededOutputLimit) {
     return `Pi minion stopped because its output exceeded the configured limit before finishing. ${partialOutputHint}`;
   }
@@ -82,11 +87,15 @@ export function describeJobResult(outcome: {
     return `Pi minion timed out before finishing and was stopped. ${partialOutputHint}`;
   }
   if (outcome.code === 0) {
-    return outcome.finalResult ?? "Pi minion finished without a result event.";
+    if (outcome.finalResult) return outcome.finalResult;
+    // Exit 0 with no result event is how the pi CLI reports a failed model
+    // turn (message_end stopReason "error"): a clean process exit, a failed
+    // run — frame it as the failure it is and point at the diagnostics.
+    return `Pi minion exited without producing a result event — the run failed before reporting an answer.${modelErrorLine}${outcome.stderrTail ? `\n${outcome.stderrTail}` : ""}\nRaw output is at ${outcome.stdoutPath} — ${outcome.rawOutputHint} Read it directly for the failure details.`;
   }
   const failureHeader = `Pi minion failed (exit ${outcome.code ?? "unknown"}${
     outcome.signal ? `, signal ${outcome.signal}` : ""
-  }).${outcome.stderrTail ? `\n${outcome.stderrTail}` : ""}`;
+  }).${modelErrorLine}${outcome.stderrTail ? `\n${outcome.stderrTail}` : ""}`;
   // A result event can still arrive before a later non-zero exit (e.g. the
   // minion reported its final answer, then crashed during cleanup) — surface
   // it rather than discarding it, but flag it since a failing exit means the

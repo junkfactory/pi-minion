@@ -24,8 +24,11 @@ writeFileSync(
   `#!/bin/sh
 for last; do :; done
 echo run >> "$HOME/spawned"
+echo "LANG=\${LANG:-unset}" >> "$HOME/langprobe"
 case "$last" in
   *MODE:fail*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; echo "boom on stderr" >&2; exit 3 ;;
+  *MODE:empty*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exit 0 ;;
+  *MODE:slow*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exec sleep 30 ;;
   *) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
      echo '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}}}'
      echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"working"}}}'
@@ -39,7 +42,7 @@ process.env.HOME = home;
 process.env.PATH = `${bin}:${realPath}`;
 
 const { startJob } = await import("../src/job-runner.js");
-const { JOB_ROOT, bindSessionApi, jobMeta, jobs, pruneOldJobs } = await import("../src/job-store.js");
+const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, stopJob } = await import("../src/job-store.js");
 const { startWorkflowSession } = await import("../src/child-session.js");
 
 type Post = { content: string; triggerTurn: boolean };
@@ -98,6 +101,24 @@ describe("startJob", () => {
     assert.match(notes[0], /started/);
   });
 
+  it("preExec wraps the spawned binary (env -u reaches the child)", async () => {
+    const overrideDir = join(home, ".pi", "agent", "extensions");
+    mkdirSync(overrideDir, { recursive: true });
+    const override = join(overrideDir, "pi-minion.json");
+    writeFileSync(override, JSON.stringify({ adapterArgs: { claude: { args: [], preExec: ["env", "-u", "LANG"] } } }));
+    const prevLang = process.env.LANG;
+    process.env.LANG = "SENTINEL_PREEXEC";
+    try {
+      const { sessionId, posts } = newSession();
+      await startJob(request("ok"), workspace, sessionId, undefined, noop, fakeUI);
+      await waitFor(() => posts.length > 0);
+      assert.equal(readFileSync(join(home, "langprobe"), "utf8").trim().split("\n").at(-1), "LANG=unset");
+    } finally {
+      process.env.LANG = prevLang;
+      rmSync(override, { force: true });
+    }
+  });
+
   it("workflow step posts nothing at its end and settles once with ok", async () => {
     const { sessionId, posts } = newSession();
     const notes: string[] = [];
@@ -134,6 +155,7 @@ describe("startJob", () => {
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0].ok, false);
     assert.equal(outcomes[0].finalResult, undefined);
+    assert.equal(jobMeta.get(id)?.status, "errored");
     assert.deepEqual(posts, []);
     // Diagnostics still land on disk even though nothing posts.
     assert.match(readFileSync(join(JOB_ROOT, id, "stderr.log"), "utf8"), /boom on stderr/);
@@ -174,6 +196,37 @@ describe("startJob", () => {
         assert.equal(posts.length, 1);
         assert.equal(posts[0].triggerTurn, true);
       }));
+  });
+
+  it("a clean exit without a result marks the job errored and settles not-ok", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const id = await startJob(
+      request("empty"), workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › empty", id: "empty", workflowId: "wf" }
+    );
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, false);
+    assert.equal(outcomes[0].finalResult, undefined);
+    assert.equal(jobMeta.get(id)?.status, "errored");
+  });
+
+  it("a mid-run cancellation keeps status cancelled after the process closes", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const id = await startJob(
+      request("slow"), workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › slow", id: "slow", workflowId: "wf" }
+    );
+    // Same sequence cancel_pi_minion runs: stop the process, record cancelled.
+    stopJob(id);
+    markJobFinished(id, "cancelled");
+    await waitFor(() => outcomes.length > 0);
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, false);
+    assert.equal(jobMeta.get(id)?.status, "cancelled");
   });
 
   it("isCancelled rejects before spawning and marks the job cancelled", async () => {

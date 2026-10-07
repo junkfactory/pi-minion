@@ -77,7 +77,55 @@ describe("loadConfig", () => {
         "utf8"
       );
       const config = await loadConfig(overridePath);
-      assert.deepEqual(config.adapterArgs, { pi: ["--flag", "val"] });
+      assert.deepEqual(config.adapterArgs, { pi: { args: ["--flag", "val"], preExec: [] } });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("normalizes an adapterArgs object entry with only preExec", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: { preExec: ["env", "-u", "AWS_PROFILE"] } } }),
+        "utf8"
+      );
+      const config = await loadConfig(overridePath);
+      assert.deepEqual(config.adapterArgs, {
+        pi: { args: [], preExec: ["env", "-u", "AWS_PROFILE"] }
+      });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when an adapterArgs object entry has non-string args", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: { args: [3] } } }),
+        "utf8"
+      );
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration \(after merging/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when an adapterArgs object entry has non-string preExec", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ adapterArgs: { pi: { preExec: ["ok", 3] } } }),
+        "utf8"
+      );
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration \(after merging/);
     } finally {
       await rm(dir, { recursive: true });
     }

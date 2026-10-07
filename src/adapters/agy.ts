@@ -162,7 +162,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     resolveModelAgainstCatalog(request.model, request.effort),
     "--effort",
     request.effort,
-    ...(config.adapterArgs?.agy ?? [])
+    ...(config.adapterArgs?.agy?.args ?? [])
   ];
 }
 

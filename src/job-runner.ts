@@ -145,7 +145,9 @@ export async function startJob(
         markJobFinished(id, "cancelled");
         throw new Error("Cancelled before the pi minion started");
       }
-      return spawn(adapter.command, adapter.buildArgs(validRequest, config), {
+      const args = adapter.buildArgs(validRequest, config);
+      const preExec = config.adapterArgs?.[adapter.command]?.preExec ?? [];
+      return spawn(preExec[0] ?? adapter.command, [...preExec.slice(1), adapter.command, ...args], {
         cwd: validRequest.workspace,
         env: adapter.environment(),
         shell: false,
@@ -167,6 +169,8 @@ export async function startJob(
 
   let previewText = "";
   let finalResult: string | undefined;
+  // Reason from the CLI's streamed error event (pi's stopReason "error"), if any.
+  let runError: string | undefined;
   let finalUsage: UsageTotals | undefined;
   let sawPermissionDenial = false;
   let timedOut = false;
@@ -217,6 +221,9 @@ export async function startJob(
           break;
         case "result":
           finalResult = event.result;
+          break;
+        case "error":
+          runError = event.message;
           break;
         case "usage":
           finalUsage = event.usage;
@@ -371,7 +378,23 @@ export async function startJob(
           // that doesn't exist.
         }
       }
-      const meta = markJobFinished(id, "done", { reportPath });
+      // "done" requires a clean exit AND a result: the pi CLI reports a
+      // failed model turn as exit 0 with the error only in its JSONL stream,
+      // so anything else is "errored" — except a cancellation, which
+      // cancel_pi_minion / workflow stopStep already recorded as
+      // "cancelled" before killing the process; don't overwrite it here.
+      clean =
+        code === 0 &&
+        !timedOut &&
+        !output.exceededOutputLimit &&
+        !outputError &&
+        finalResult !== undefined;
+      const priorStatus = jobMeta.get(id)?.status;
+      const meta = markJobFinished(
+        id,
+        priorStatus === "cancelled" ? "cancelled" : clean ? "done" : "errored",
+        { reportPath }
+      );
       const result = outputError
         ? `Pi minion output capture failed: ${outputError.message}`
         : describeJobResult({
@@ -382,7 +405,8 @@ export async function startJob(
             finalResult: resultForContext,
             stderrTail: output.stderrTail,
             stdoutPath: output.stdoutPath,
-            rawOutputHint: adapter.rawOutputHint
+            rawOutputHint: adapter.rawOutputHint,
+            modelError: runError
           });
       try {
         // Best-effort, like result.md: a failed session write mustn't lose the result.
@@ -423,7 +447,6 @@ export async function startJob(
         },
         !onFinalResult || finalNote !== ""
       );
-      clean = code === 0 && !timedOut && !output.exceededOutputLimit && !outputError && finalResult !== undefined;
     } finally {
       settle({ finalResult, reportPath, ok: clean });
     }

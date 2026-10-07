@@ -155,10 +155,20 @@ describe("buildArgs", () => {
   });
 
   it("spreads adapterArgs.pi just before the -- separator", () => {
-    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { pi: ["--verbose"] } }));
+    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { pi: { args: ["--verbose"], preExec: [] } } }));
     assert.equal(args[args.indexOf("--") - 1], "--verbose");
     assert.equal(args[args.indexOf("--") + 1], "Explore the repo");
     assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--verbose"));
+  });
+
+  it("never leaks adapterArgs.pi.preExec into the adapter argv", () => {
+    const args = buildArgs(
+      fakeRequest(),
+      fakeConfig({ adapterArgs: { pi: { args: [], preExec: ["env", "-u", "AWS_PROFILE"] } } })
+    );
+    assert.ok(!args.includes("env"));
+    assert.ok(!args.includes("-u"));
+    assert.ok(!args.includes("AWS_PROFILE"));
   });
 });
 
@@ -234,6 +244,24 @@ describe("parseLine", () => {
       { kind: "model", model: "gpt-6-luna" },
       { kind: "usageDelta", delta: { input: 258, output: 5, cacheWrite: 0, cacheRead: 3584 } },
       { kind: "result", result: "OK" }
+    ]);
+  });
+
+  it("emits an error event for a failed assistant message_end", () => {
+    const failed = JSON.stringify({
+      type: "message_end",
+      message: { role: "assistant", content: [], stopReason: "error", errorMessage: "Region is missing" }
+    });
+    assert.deepEqual(parseLine(failed), [{ kind: "error", message: "Region is missing" }]);
+  });
+
+  it("emits a generic error event when the failed message has no errorMessage", () => {
+    const failed = JSON.stringify({
+      type: "message_end",
+      message: { role: "assistant", content: [], stopReason: "error" }
+    });
+    assert.deepEqual(parseLine(failed), [
+      { kind: "error", message: "the model turn failed before producing a result" }
     ]);
   });
 

@@ -20,8 +20,8 @@
   "shortcut": "alt+j",
   "showGlyphs": true,
   "adapterArgs": {
-    "pi": [],
-    "claude": [],
-    "agy": []
+    "pi": { "args": [], "preExec": [] },
+    "claude": { "args": [], "preExec": [] },
+    "agy": { "args": [], "preExec": [] }
   }
 }

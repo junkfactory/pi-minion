@@ -22,11 +22,23 @@ describe("describeJobResult", () => {
     assert.equal(describeJobResult(fakeOutcome({ code: 0, finalResult: "done" })), "done");
   });
 
-  it("falls back to a placeholder when a clean exit produced no result event", () => {
-    assert.equal(
-      describeJobResult(fakeOutcome({ code: 0 })),
-      "Pi minion finished without a result event."
+  it("frames a clean exit with no result event as a failure pointing at the raw output", () => {
+    const message = describeJobResult(fakeOutcome({ code: 0 }));
+    assert.match(
+      message,
+      /^Pi minion exited without producing a result event — the run failed before reporting an answer\./
     );
+    assert.match(message, /Raw output is at \/tmp\/job\/stdout\.json — fake raw-output hint\./);
+  });
+
+  it("includes the model error inline for a resultless clean exit", () => {
+    const message = describeJobResult(fakeOutcome({ code: 0, modelError: "Region is missing" }));
+    assert.match(message, /Model error: Region is missing/);
+  });
+
+  it("includes the model error in the failure header", () => {
+    const message = describeJobResult(fakeOutcome({ code: 1, modelError: "model exploded" }));
+    assert.match(message, /Pi minion failed \(exit 1\)\.\nModel error: model exploded/);
   });
 
   it("reports a plain failure with the stderr tail on a non-zero exit", () => {

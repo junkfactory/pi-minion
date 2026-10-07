@@ -271,7 +271,7 @@ describe("buildArgs", () => {
   });
 
   it("appends adapterArgs.agy at the very end of the argv", () => {
-    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { agy: ["--flag", "v"] } }));
+    const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { agy: { args: ["--flag", "v"], preExec: [] } } }));
     assert.deepEqual(args.slice(-2), ["--flag", "v"]);
     assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--flag"));
   });

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
-import type { MinionConfig } from "./adapters/types.js";
+import type { AdapterArgs, MinionConfig } from "./adapters/types.js";
 
 const CONFIG_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "pi-minion.json");
 export const USER_CONFIG_PATH = join(getAgentDir(), "extensions", "pi-minion.json");
@@ -57,11 +57,13 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     ? await readFile(overridePath, "utf8")
     : undefined;
   const config = applyConfigOverride(base, overrideText, overridePath);
+  const adapterArgs =
+    config.adapterArgs === undefined ? undefined : normalizeAdapterArgs(config.adapterArgs);
   if (
     !Array.isArray(config.allowedModels) ||
     !Array.isArray(config.allowedTools) ||
     (config.blockedModels !== undefined && !Array.isArray(config.blockedModels)) ||
-    (config.adapterArgs !== undefined && !isAdapterArgs(config.adapterArgs))
+    (config.adapterArgs !== undefined && adapterArgs === undefined)
   ) {
     throw new Error(
       overrideText !== undefined
@@ -69,6 +71,7 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
         : `Invalid pi-minion configuration: ${CONFIG_PATH}`
     );
   }
+  if (adapterArgs !== undefined) config.adapterArgs = adapterArgs;
   return config;
 }
 
@@ -87,15 +90,24 @@ function modelMatchesPattern(model: string, pattern: string): boolean {
     : model === pattern;
 }
 
-function isAdapterArgs(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.values(value as Record<string, unknown>).every(
-      (entry) => Array.isArray(entry) && entry.every((item) => typeof item === "string")
-    )
-  );
+// Returns the normalized map, or undefined if any entry is invalid
+// (neither a string[] nor an object with optional string[] args/preExec).
+function normalizeAdapterArgs(value: unknown): Record<string, AdapterArgs> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, AdapterArgs> = {};
+  for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+    const isStrings = (v: unknown) => Array.isArray(v) && v.every((i) => typeof i === "string");
+    if (isStrings(entry)) {
+      out[name] = { args: [...entry as string[]], preExec: [] };
+    } else if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
+      const { args, preExec } = entry as { args?: unknown; preExec?: unknown };
+      if ((args !== undefined && !isStrings(args)) || (preExec !== undefined && !isStrings(preExec))) return undefined;
+      out[name] = { args: [...(args as string[] | undefined ?? [])], preExec: [...(preExec as string[] | undefined ?? [])] };
+    } else {
+      return undefined;
+    }
+  }
+  return out;
 }
 
 export function isModelBlocked(
