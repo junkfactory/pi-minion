@@ -19,6 +19,14 @@ export type MinionConfig = {
   // gemini-pro, ...). Checked before allowedModels; empty/absent = nothing
   // blocked. Merged wholesale like allowedModels.
   blockedModels?: string[];
+  // Provider-level model filter: { allowed?: string[]; blocked?: string[] }
+  // of provider names — "claude" (claude adapter), "antigravity" (agy), or
+  // a pi catalog entry's provider ("opencode-go", "openai-codex", ...).
+  // blocked wins over allowed; empty/absent allowed = no allowlist;
+  // empty/absent blocked = nothing blocked. Applied to help_pi_minion's
+  // list and to validateRequest, same hide-and-reject contract as
+  // allowedModels/blockedModels. Replaced wholesale by user override.
+  providers?: { allowed?: string[]; blocked?: string[] };
   allowedTools: string[];
   maxBudgetUsd: number;
   timeoutMs: number;
@@ -129,6 +137,11 @@ export interface AgentCliAdapter {
   // Optional — adapters that don't ship with the user-callable aliases (e.g.
   // a future CLI that routes only version-resolved live ids) leave it off.
   availableIds?(): string[];
+  // Provider identities for this model string as this adapter routes it —
+  // called only on the adapter that owns the model (registry claim order).
+  // [] = unidentifiable (callers keep the model). Optional — adapters
+  // without provider knowledge omit it.
+  providersOf?(model: string): string[];
   // Called on every pi session_start so the adapter can capture or warm live
   // state from the session context (pi seeds its model registry; agy kicks
   // off a model-catalog refresh). Optional — adapters with only static

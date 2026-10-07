@@ -28,6 +28,12 @@ export function availableIds(): string[] {
   return [...CLAUDE_MODEL_ALIASES];
 }
 
+// Everything this adapter runs goes through the claude CLI — one provider
+// by construction, for aliases and "claude-*" ids alike.
+export function providersOf(): string[] {
+  return ["claude"];
+}
+
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   const task = resolveTaskText(request);
   return [
@@ -399,6 +405,7 @@ export const claudeAdapter: AgentCliAdapter = {
   capabilities,
   ownsModel,
   availableIds,
+  providersOf,
   buildArgs,
   environment,
   parseLine,

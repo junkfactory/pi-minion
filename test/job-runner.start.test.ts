@@ -45,7 +45,7 @@ chmodSync(join(bin, "claude"), 0o755);
 process.env.HOME = home;
 process.env.PATH = `${bin}:${realPath}`;
 
-const { startJob } = await import("../src/job-runner.js");
+const { startJob, validateRequest } = await import("../src/job-runner.js");
 const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, stopJob } = await import("../src/job-store.js");
 const { startWorkflowSession } = await import("../src/child-session.js");
 
@@ -80,6 +80,66 @@ function waitFor(cond: () => boolean, ms = 10_000): Promise<void> {
     tick();
   });
 }
+
+describe("validateRequest providers gate", () => {
+  // Minimal well-formed MinionConfig for the provider gate (mirrors test/fakes.ts).
+  const configWith = (providers: { allowed?: string[]; blocked?: string[] }) => ({
+    allowedModels: ["sonnet"],
+    blockedModels: [],
+    allowedTools: [],
+    maxBudgetUsd: 5,
+    timeoutMs: 900_000,
+    providers
+  });
+  const request = { task: "x", workspace, model: "sonnet", effort: "medium" };
+
+  it("rejects a model whose provider is blocked", () =>
+    assert.rejects(
+      validateRequest(request, workspace, configWith({ blocked: ["claude"] })),
+      /excluded by the providers config \(providers: claude\)/
+    ));
+
+  it("rejects a model whose provider is outside a non-empty allowlist", () =>
+    assert.rejects(
+      validateRequest(request, workspace, configWith({ allowed: ["antigravity"] })),
+      /excluded by the providers config/
+    ));
+
+  it("keeps a model whose provider passes the filter", async () => {
+    await validateRequest(request, workspace, configWith({ blocked: ["antigravity"] }));
+  });
+
+  it("enforces every backing provider of a shared alias", async () => {
+    const { setModelRegistry } = await import("../src/adapters/pi.js");
+    const { fakeModelRegistry } = await import("./fakes.js");
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-5.6-luna", provider: "amazon-bedrock" }
+      ])
+    );
+    try {
+      // One blocked backing provider must reject the whole alias — help hides
+      // it under the same config (isModelProviderAllowed uses .every), so this
+      // must not slip through validateRequest.
+      await assert.rejects(
+        validateRequest(
+          { ...request, model: "luna" },
+          workspace,
+          { ...configWith({ blocked: ["opencode-go"] }), allowedModels: [] }
+        ),
+        /excluded by the providers config/
+      );
+      await validateRequest(
+        { ...request, model: "luna" },
+        workspace,
+        { ...configWith({ blocked: ["antigravity"] }), allowedModels: [] }
+      );
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
+});
 
 describe("startJob", () => {
   before(() => assert.ok(JOB_ROOT.startsWith(home), `JOB_ROOT ${JOB_ROOT} must live under the temp HOME`));

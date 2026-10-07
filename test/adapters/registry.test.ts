@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { getAdapter, listAdapterNames, resolveAdapterForModel, resolveAdapterForModelRefreshed } from "../../src/adapters/registry.js";
+import { getAdapter, listAdapterNames, resolveAdapterForModel, resolveAdapterForModelRefreshed, providersOfModel, isModelProviderAllowed } from "../../src/adapters/registry.js";
 import { setModelRegistry } from "../../src/adapters/pi.js";
 import { setAgyModelsForTesting } from "../../src/adapters/agy.js";
 import { parseAgyModelsList } from "../../src/adapters/agy.js";
@@ -48,6 +48,17 @@ const AGY_CATALOG = parseAgyModelsList(
 before(() => {
   setAgyModelsForTesting(AGY_CATALOG);
 });
+
+// Restores the file-seed pi registry after a test swaps in its own catalog.
+const restoreSeed = () =>
+  setModelRegistry(
+    fakeModelRegistry([
+      { id: "gpt-6-luna", provider: "opencode-go" },
+      { id: "gpt-5.6-terra", provider: "opencode-go" },
+      { id: "gpt-6-sol", provider: "openai-codex" },
+      { id: "gpt-6.1-sol", provider: "openai-codex" }
+    ])
+  );
 
 describe("getAdapter / listAdapterNames", () => {
   it("returns the claude adapter by name", () => {
@@ -102,16 +113,6 @@ describe("resolveAdapterForModel", () => {
 });
 
 describe("resolveAdapterForModelRefreshed", () => {
-  const restoreSeed = () =>
-    setModelRegistry(
-      fakeModelRegistry([
-        { id: "gpt-6-luna", provider: "opencode-go" },
-        { id: "gpt-5.6-terra", provider: "opencode-go" },
-        { id: "gpt-6-sol", provider: "openai-codex" },
-        { id: "gpt-6.1-sol", provider: "openai-codex" }
-      ])
-    );
-
   it("claims the model once the refresh brings its catalog up", async () => {
     setModelRegistry(undefined); // pi's catalog not captured yet (cold start)
     try {
@@ -136,5 +137,64 @@ describe("resolveAdapterForModelRefreshed", () => {
       /Unknown model "totally-unknown"/
     );
     assert.equal(refreshed, 1);
+  });
+});
+
+describe("providersOfModel / isModelProviderAllowed", () => {
+  it("attributes claude's aliases and claude-* ids to claude", () => {
+    assert.deepEqual(providersOfModel("haiku"), ["claude"]);
+    assert.deepEqual(providersOfModel("claude-whatever"), ["claude"]);
+  });
+
+  it("attributes agy's aliases to antigravity", () => {
+    assert.deepEqual(providersOfModel("gpt-oss"), ["antigravity"]);
+  });
+
+  it("attributes pi's ids and provider/alias refs to the catalog provider", () => {
+    assert.deepEqual(providersOfModel("gpt-6-luna"), ["opencode-go"]);
+    assert.deepEqual(providersOfModel("opencode-go/luna"), ["opencode-go"]);
+  });
+
+  it("returns [] for a model no adapter claims", () => {
+    assert.deepEqual(providersOfModel("totally-unknown"), []);
+  });
+
+  it("returns every distinct provider an alias suffix matches", () => {
+    try {
+      setModelRegistry(
+        fakeModelRegistry([
+          { id: "gpt-6-luna", provider: "opencode-go" },
+          { id: "gpt-5.6-luna", provider: "amazon-bedrock" }
+        ])
+      );
+      assert.deepEqual(providersOfModel("luna").sort(), ["amazon-bedrock", "opencode-go"]);
+    } finally {
+      restoreSeed();
+    }
+  });
+
+  it("hides a model whose provider is blocked and keeps unaffected ones", () => {
+    assert.equal(isModelProviderAllowed({ providers: { blocked: ["antigravity"] } }, "gpt-oss"), false);
+    assert.equal(isModelProviderAllowed({ providers: { blocked: ["antigravity"] } }, "gpt-6-luna"), true);
+  });
+
+  it("hides a model whose provider is outside a non-empty allowlist", () => {
+    assert.equal(isModelProviderAllowed({ providers: { allowed: ["antigravity"] } }, "gpt-6-luna"), false);
+  });
+
+  it("hides a shared alias when any backing provider fails the filter", () => {
+    try {
+      setModelRegistry(
+        fakeModelRegistry([
+          { id: "gpt-6-luna", provider: "opencode-go" },
+          { id: "gpt-5.6-luna", provider: "amazon-bedrock" }
+        ])
+      );
+      assert.equal(isModelProviderAllowed({ providers: { blocked: ["opencode-go"] } }, "luna"), false);
+      assert.equal(isModelProviderAllowed({ providers: { allowed: ["amazon-bedrock"] } }, "luna"), false);
+      assert.equal(isModelProviderAllowed({ providers: { blocked: ["antigravity"] } }, "luna"), true);
+    } finally {
+      restoreSeed();
+    }
   });
 });

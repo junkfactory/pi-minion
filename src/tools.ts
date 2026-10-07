@@ -4,7 +4,7 @@ import { Cron } from "croner";
 import { Type, type Static } from "typebox";
 import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
 import { commandExists } from "./adapters/util.js";
-import { getAdapter, listAdapterNames } from "./adapters/registry.js";
+import { getAdapter, isModelProviderAllowed, listAdapterNames } from "./adapters/registry.js";
 import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, isModelAllowed, loadConfig } from "./config.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
@@ -274,10 +274,11 @@ async function confirmWorkflowRequest(
 // routable by anyone present and stray versions nobody claims. The same
 // isModelAllowed gate as validateRequest drops blockedModels (and, when
 // allowedModels is non-empty, anything unlisted) so help never recommends a
-// model a run would reject.
+// model a run would reject. The providers filter is applied in both places
+// (this list and validateRequest) so the two stay in sync, like the model gates.
 export function buildHelpModelList(
   candidates: Array<{ adapter: AgentCliAdapter; present: boolean }>,
-  config: Pick<MinionConfig, "allowedModels" | "blockedModels">
+  config: Pick<MinionConfig, "allowedModels" | "blockedModels" | "providers">
 ): string[] {
   const present = candidates.filter((candidate) => candidate.present);
   const universe = config.allowedModels.length
@@ -285,7 +286,9 @@ export function buildHelpModelList(
     : [...new Set(present.flatMap(({ adapter }) => adapter.availableIds?.() ?? []))];
   return universe.filter(
     (model) =>
-      isModelAllowed(config, model) && present.some(({ adapter }) => adapter.ownsModel(model))
+      isModelAllowed(config, model) &&
+      isModelProviderAllowed(config, model) &&
+      present.some(({ adapter }) => adapter.ownsModel(model))
   );
 }
 

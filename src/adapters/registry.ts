@@ -1,7 +1,8 @@
-import type { AgentCliAdapter } from "./types.js";
+import type { AgentCliAdapter, MinionConfig } from "./types.js";
 import { claudeAdapter } from "./claude.js";
 import { agyAdapter } from "./agy.js";
 import { piAdapter } from "./pi.js";
+import { isProviderAllowed } from "../config.js";
 
 const registry = new Map<string, AgentCliAdapter>([
   ["claude", claudeAdapter],
@@ -54,4 +55,23 @@ export async function resolveAdapterForModelRefreshed(
       throw error;
     }
   }
+}
+
+// The owning adapter decides the provider identity (claim order:
+// claude → agy → pi, same as resolveAdapterForModel).
+export function providersOfModel(model: string): string[] {
+  const adapter = [...registry.values()].find((candidate) => candidate.ownsModel(model));
+  return adapter?.providersOf?.(model) ?? [];
+}
+
+// Help list + validateRequest gate: unidentifiable providers keep the
+// model; otherwise EVERY backing provider must survive
+// blocked-wins-allowed — pi resolves aliases itself at spawn, so one
+// blocked entry under a shared alias must hide the whole string.
+export function isModelProviderAllowed(
+  config: Pick<MinionConfig, "providers">,
+  model: string
+): boolean {
+  const providers = providersOfModel(model);
+  return providers.length === 0 || providers.every((p) => isProviderAllowed(config, p));
 }

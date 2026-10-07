@@ -158,6 +158,68 @@ describe("buildHelpModelList", () => {
     assert.ok(result.includes("sonnet"), "sonnet missing");
     assert.ok(!result.some((model) => model.startsWith("gemini")), `gemini ids leaked: ${result.join(", ")}`);
   });
+
+  it("filters out every model of a blocked provider", () => {
+    const result = buildHelpModelList(
+      [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true },
+        { adapter: piAdapter, present: true }
+      ],
+      { allowedModels: [], blockedModels: [], providers: { blocked: ["antigravity"] } }
+    );
+    assert.ok(result.includes("sonnet"), "claude models must survive an unrelated provider block");
+    assert.ok(!result.includes("gpt-oss"), `agy gpt-oss leaked: ${result.join(", ")}`);
+    assert.ok(!result.includes("gemini-flash"), `agy gemini-flash leaked: ${result.join(", ")}`);
+  });
+
+  it("keeps only models of an allowlisted provider", () => {
+    const result = buildHelpModelList(
+      [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true },
+        { adapter: piAdapter, present: true }
+      ],
+      { allowedModels: [], blockedModels: [], providers: { allowed: ["claude"] } }
+    );
+    assert.ok(result.includes("sonnet"), "claude models missing");
+    assert.ok(
+      result.every((model) => claudeAdapter.ownsModel(model)),
+      `non-claude model leaked under providers.allowed=[claude]: ${result.join(", ")}`
+    );
+  });
+
+  it("hides a shared alias when any backing provider is blocked", () => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-5.6-luna", provider: "amazon-bedrock" }
+      ])
+    );
+    try {
+      const candidates = [
+        { adapter: claudeAdapter, present: true },
+        { adapter: agyAdapter, present: true },
+        { adapter: piAdapter, present: true }
+      ];
+      const blocked = buildHelpModelList(candidates, {
+        allowedModels: [],
+        blockedModels: [],
+        providers: { blocked: ["opencode-go"] }
+      });
+      assert.ok(!blocked.includes("luna"), `shared alias leaked over a blocked provider: ${blocked.join(", ")}`);
+      assert.ok(!blocked.includes("gpt-6-luna"), `blocked provider's id leaked: ${blocked.join(", ")}`);
+      assert.ok(blocked.includes("gpt-5.6-luna"), `unblocked provider's id missing: ${blocked.join(", ")}`);
+      const unrelated = buildHelpModelList(candidates, {
+        allowedModels: [],
+        blockedModels: [],
+        providers: { blocked: ["antigravity"] }
+      });
+      assert.ok(unrelated.includes("luna"), `luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
 });
 
 describe("RUN_PI_MINION_PARAMETERS", () => {

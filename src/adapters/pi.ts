@@ -87,6 +87,28 @@ export function ownsModel(model: string): boolean {
   );
 }
 
+// Provider identities pi would route this model string to — the exact id,
+// the "provider/alias" prefix, or every entry an alias suffix matches
+// (aliases can span providers: "luna" over opencode-go and
+// amazon-bedrock), deduped. Deliberately mirrors ownsModel's match logic
+// so claim and attribution never disagree; [] = catalog can't identify it.
+export function providersOf(model: string): string[] {
+  const available = modelRegistry?.getAvailable();
+  if (!available) return [];
+  const lower = model.toLowerCase();
+  const slash = lower.indexOf("/");
+  const alias = slash === -1 ? lower : lower.slice(slash + 1);
+  const matches =
+    slash === -1
+      ? available.filter((c) => c.id.toLowerCase() === lower || c.id.toLowerCase().endsWith(`-${lower}`))
+      : available.filter(
+          (c) =>
+            c.provider.toLowerCase() === lower.slice(0, slash) &&
+            (c.id.toLowerCase() === alias || c.id.toLowerCase().endsWith(`-${alias}`))
+        );
+  return [...new Set(matches.map((c) => c.provider))];
+}
+
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   // --mode json streams JSONL and exits once the prompt finishes (no -p
   // needed). --no-extensions keeps the child from loading pi-minion itself
@@ -306,6 +328,7 @@ export const piAdapter: AgentCliAdapter = {
   capabilities,
   ownsModel,
   availableIds: availableModelIds,
+  providersOf,
   startSession: (ctx) => setModelRegistry(ctx.modelRegistry),
   buildArgs,
   environment,

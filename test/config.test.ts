@@ -9,6 +9,8 @@ import {
   applyConfigOverride,
   isModelAllowed,
   isModelBlocked,
+  isProviderAllowed,
+  isProviderBlocked,
   loadConfig,
   readShortcutConfigSync,
   resolveShortcut,
@@ -183,6 +185,44 @@ describe("loadConfig", () => {
       await rm(dir, { recursive: true });
     }
   });
+
+  it("passes a valid providers override through the merge", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ providers: { blocked: ["antigravity"] } }),
+        "utf8"
+      );
+      const config = await loadConfig(overridePath);
+      assert.deepEqual(config.providers, { blocked: ["antigravity"] });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when providers is not an object", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ providers: [] }), "utf8");
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when a providers side is not a string array", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ providers: { allowed: "x" } }), "utf8");
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
 });
 
 describe("isModelAllowed / isModelBlocked", () => {
@@ -226,6 +266,33 @@ describe("isModelAllowed / isModelBlocked", () => {
   it("reports nothing blocked when blockedModels is absent", () => {
     assert.equal(isModelBlocked({}, "sonnet"), false);
     assert.equal(isModelAllowed({ allowedModels: [], blockedModels: undefined }, "sonnet"), true);
+  });
+});
+
+describe("isProviderAllowed / isProviderBlocked", () => {
+  it("allows everything when providers is absent", () => {
+    const config = fakeConfig();
+    assert.equal(isProviderAllowed(config, "any"), true);
+    assert.equal(isProviderBlocked(config, "any"), false);
+  });
+
+  it("lets blockedProviders win over allowedProviders (precedence)", () => {
+    const config = fakeConfig({ providers: { allowed: ["opencode-go", "deepseek"], blocked: ["deepseek"] } });
+    assert.equal(isProviderAllowed(config, "opencode-go"), true);
+    assert.equal(isProviderAllowed(config, "deepseek"), false);
+    assert.equal(isProviderAllowed(config, "glm-5.3-flash"), false);
+  });
+
+  it("blocks every provider matching a trailing-'*' prefix pattern", () => {
+    const config = fakeConfig({ providers: { blocked: ["amazon-*"] } });
+    assert.equal(isProviderBlocked(config, "amazon-bedrock"), true);
+    assert.equal(isProviderAllowed(config, "amazon-bedrock"), false);
+    assert.equal(isProviderAllowed(config, "openai-codex"), true);
+  });
+
+  it("folds case on both sides of the match", () => {
+    const config = fakeConfig({ providers: { allowed: ["OpenAI-Codex"] } });
+    assert.equal(isProviderAllowed(config, "openai-codex"), true);
   });
 });
 

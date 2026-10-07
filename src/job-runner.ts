@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { JobUI, StepRunStats } from "./agent.ui.js";
 import type { MinionConfig, MinionRequest, TokenCounts, UsageTotals } from "./adapters/types.js";
 import { resolveTaskText, truncate } from "./adapters/util.js";
-import { listAdapters, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
+import { listAdapters, providersOfModel, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
 import { writeChildSession } from "./child-session.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
@@ -13,6 +13,7 @@ import {
   DEFAULT_PRUNE_AFTER_DAYS,
   isModelAllowed,
   isModelBlocked,
+  isProviderAllowed,
   loadConfig
 } from "./config.js";
 import {
@@ -60,6 +61,12 @@ export async function validateRequest(
         ? `Model is blocked: ${request.model} (blockedModels). Call help_pi_minion for the models usable here.`
         : `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
     );
+  const modelProviders = providersOfModel(request.model);
+  if (modelProviders.length > 0 && !modelProviders.every((p) => isProviderAllowed(config, p))) {
+    throw new Error(
+      `Model ${request.model} is excluded by the providers config (providers: ${modelProviders.join(", ")}). Call help_pi_minion for the models usable here.`
+    );
+  }
   if (
     request.maxBudgetUsd !== undefined &&
     (!Number.isFinite(request.maxBudgetUsd) || request.maxBudgetUsd <= 0)

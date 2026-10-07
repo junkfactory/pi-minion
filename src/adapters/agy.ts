@@ -147,6 +147,12 @@ export function availableIds(): string[] {
   return [...deriveAliases(entries).map((cluster) => cluster.name), ...entries.map((entry) => entry.id)];
 }
 
+// Whatever the underlying model, agy serves it under Antigravity's own
+// provider identity.
+export function providersOf(): string[] {
+  return ["antigravity"];
+}
+
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
   // agy has no --append-system-prompt/--system-prompt equivalent (confirmed
   // against `agy --help` — no prompt-related flag beyond --prompt itself, an
@@ -344,6 +350,7 @@ export const agyAdapter: AgentCliAdapter = {
   capabilities,
   ownsModel,
   availableIds,
+  providersOf,
   refreshCatalog: refreshAgyModels,
   buildArgs,
   environment,

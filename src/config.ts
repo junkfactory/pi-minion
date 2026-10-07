@@ -63,6 +63,7 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     !Array.isArray(config.allowedModels) ||
     !Array.isArray(config.allowedTools) ||
     (config.blockedModels !== undefined && !Array.isArray(config.blockedModels)) ||
+    (config.providers !== undefined && !isProvidersShape(config.providers)) ||
     (config.adapterArgs !== undefined && adapterArgs === undefined)
   ) {
     throw new Error(
@@ -88,6 +89,15 @@ function modelMatchesPattern(model: string, pattern: string): boolean {
   return pattern.endsWith("*")
     ? model.startsWith(pattern.slice(0, -1))
     : model === pattern;
+}
+
+// Validates { allowed?: string[]; blocked?: string[] } without
+// normalizing: the isProvider* helpers default each missing side to [].
+function isProvidersShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { allowed, blocked } = value as { allowed?: unknown; blocked?: unknown };
+  const strings = (v: unknown) => v === undefined || (Array.isArray(v) && v.every((i) => typeof i === "string"));
+  return strings(allowed) && strings(blocked);
 }
 
 // Returns the normalized map, or undefined if any entry is invalid
@@ -123,6 +133,26 @@ export function isModelAllowed(
 ): boolean {
   if (isModelBlocked(config, model)) return false;
   return config.allowedModels.length === 0 || config.allowedModels.some((p) => modelMatchesPattern(model, p));
+}
+
+export function isProviderBlocked(
+  config: Pick<MinionConfig, "providers">,
+  provider: string
+): boolean {
+  const lower = provider.toLowerCase();
+  return (config.providers?.blocked ?? []).some((p) => modelMatchesPattern(lower, p.toLowerCase()));
+}
+
+// Same contract as isModelAllowed: blocked wins, empty allowed = no
+// allowlist; pattern matching reuses modelMatchesPattern (trailing '*'),
+// case-insensitive on both sides.
+export function isProviderAllowed(
+  config: Pick<MinionConfig, "providers">,
+  provider: string
+): boolean {
+  if (isProviderBlocked(config, provider)) return false;
+  const allowed = config.providers?.allowed ?? [];
+  return allowed.length === 0 || allowed.some((p) => modelMatchesPattern(provider.toLowerCase(), p.toLowerCase()));
 }
 
 export function resolveShortcut(config: Pick<MinionConfig, "shortcut">): KeyId {
