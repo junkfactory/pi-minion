@@ -27,17 +27,20 @@ type AgyModelsEvent = {
   command?: { data?: { models?: unknown } };
 };
 
-// Shape-guarded parser: [] on wrong status, wrong shape, malformed JSON —
-// never a partial result. claude-* ids are dropped here as a POLICY, not a
+// Shape-guarded parser: undefined on wrong status, wrong shape, malformed
+// JSON — never a partial result. The undefined/array split is load-bearing:
+// refreshAgyModels treats undefined as a FAILED refresh (keep the previous
+// snapshot) and [] as a legitimately empty catalog (replace it). claude-* ids
+// are dropped here as a POLICY, not a
 // mechanism: Claude models always route through claudeAdapter, so agy must
 // not silently claim them; a new foreign-provider family needs a deliberate
 // ownership decision, not a silent filter extension.
-export function parseAgyModelsList(stdout: string): AgyModelEntry[] {
+export function parseAgyModelsList(stdout: string): AgyModelEntry[] | undefined {
   try {
     const parsed = JSON.parse(stdout) as AgyModelsEvent;
-    if (parsed?.status !== "SUCCESS") return [];
+    if (parsed?.status !== "SUCCESS") return undefined;
     const models = parsed.command?.data?.models;
-    if (!Array.isArray(models)) return [];
+    if (!Array.isArray(models)) return undefined;
     return models
       .filter(
         (model): model is { id: string; label?: unknown } =>
@@ -50,7 +53,7 @@ export function parseAgyModelsList(stdout: string): AgyModelEntry[] {
         label: typeof model.label === "string" ? model.label : undefined
       }));
   } catch {
-    return [];
+    return undefined;
   }
 }
 
@@ -59,10 +62,10 @@ const AGY_MODELS_TTL_MS = 60 * 60 * 1000;
 const AGY_MODELS_TIMEOUT_MS = 2000;
 
 // One snapshot for every consumer (see parseAgyModelsList's header). A failed
-// refresh (spawn error, timeout, parse failure) keeps the previous snapshot —
-// the catalog only empties on a legitimate empty/failed response after a
-// process restart, or never mid-session, so a transient agy hiccup never
-// routes a job to nothing.
+// refresh (spawn error, timeout, untrusted response) keeps the previous
+// snapshot and its fetchedAt — the catalog only empties on a legitimate
+// empty response (status SUCCESS with an empty models array) or at process
+// start, so a transient agy hiccup never routes a job to nothing.
 let cache: { entries: AgyModelEntry[]; fetchedAt: number } | undefined;
 let inflight: Promise<void> | undefined;
 
@@ -77,7 +80,11 @@ export async function refreshAgyModels(): Promise<void> {
       ["--output-format=json", "models"],
       { timeout: AGY_MODELS_TIMEOUT_MS }
     );
-    cache = { entries: parseAgyModelsList(result.stdout), fetchedAt: Date.now() };
+    const entries = parseAgyModelsList(result.stdout);
+    // undefined = untrusted response: keep the previous snapshot AND its
+    // fetchedAt, so the next refresh call retries instead of serving an hour
+    // of emptiness.
+    if (entries) cache = { entries, fetchedAt: Date.now() };
   })()
     .catch(() => {
       // spawn error / timeout — snapshot unchanged, same as if agy were absent.
@@ -92,9 +99,10 @@ function cachedEntries(): AgyModelEntry[] {
   return cache?.entries ?? [];
 }
 
-// Test-only: seed/restore the snapshot without spawning agy.
-export function setAgyModelsForTesting(entries: AgyModelEntry[] | undefined): void {
-  cache = entries ? { entries, fetchedAt: Date.now() } : undefined;
+// Test-only: seed/restore the snapshot without spawning agy. fetchedAt is
+// overridable so refresh tests can model an expired snapshot.
+export function setAgyModelsForTesting(entries: AgyModelEntry[] | undefined, fetchedAt: number = Date.now()): void {
+  cache = entries ? { entries, fetchedAt } : undefined;
 }
 
 // Aliases derive from the same shared machinery as pi's (util.ts) — version

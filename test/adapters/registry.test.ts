@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { getAdapter, listAdapterNames, resolveAdapterForModel } from "../../src/adapters/registry.js";
+import { getAdapter, listAdapterNames, resolveAdapterForModel, resolveAdapterForModelRefreshed } from "../../src/adapters/registry.js";
 import { setModelRegistry } from "../../src/adapters/pi.js";
 import { setAgyModelsForTesting } from "../../src/adapters/agy.js";
 import { parseAgyModelsList } from "../../src/adapters/agy.js";
@@ -98,5 +98,43 @@ describe("resolveAdapterForModel", () => {
       () => resolveAdapterForModel("totally-unknown"),
       /Unknown model "totally-unknown"/
     );
+  });
+});
+
+describe("resolveAdapterForModelRefreshed", () => {
+  const restoreSeed = () =>
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-5.6-terra", provider: "opencode-go" },
+        { id: "gpt-6-sol", provider: "openai-codex" },
+        { id: "gpt-6.1-sol", provider: "openai-codex" }
+      ])
+    );
+
+  it("claims the model once the refresh brings its catalog up", async () => {
+    setModelRegistry(undefined); // pi's catalog not captured yet (cold start)
+    try {
+      let refreshed = 0;
+      const adapter = await resolveAdapterForModelRefreshed("luna", async () => {
+        refreshed++;
+        setModelRegistry(fakeModelRegistry([{ id: "gpt-6-luna", provider: "opencode-go" }]));
+      });
+      assert.equal(adapter.name, "pi");
+      assert.equal(refreshed, 1);
+    } finally {
+      restoreSeed();
+    }
+  });
+
+  it("rethrows the original Unknown model error when the refresh claims nothing", async () => {
+    let refreshed = 0;
+    await assert.rejects(
+      resolveAdapterForModelRefreshed("totally-unknown", async () => {
+        refreshed++;
+      }),
+      /Unknown model "totally-unknown"/
+    );
+    assert.equal(refreshed, 1);
   });
 });

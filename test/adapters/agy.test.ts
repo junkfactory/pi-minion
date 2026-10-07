@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
   buildArgs,
@@ -8,6 +11,7 @@ import {
   ownsModel,
   parseAgyModelsList,
   parseLine,
+  refreshAgyModels,
   setAgyModelsForTesting
 } from "../../src/adapters/agy.js";
 import { resolveAlias } from "../../src/adapters/util.js";
@@ -49,7 +53,7 @@ const AGY_MODELS_STDOUT = JSON.stringify({
 
 // Same catalog as AGY_MODELS_STDOUT, pre-parsed and claude-filtered, so tests
 // that operate on the parsed shape don't repeat the JSON.
-const AGY_CATALOG = parseAgyModelsList(AGY_MODELS_STDOUT);
+const AGY_CATALOG = parseAgyModelsList(AGY_MODELS_STDOUT)!;
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
@@ -93,15 +97,22 @@ describe("parseAgyModelsList", () => {
     ]);
   });
 
-  it("returns [] on malformed JSON, non-SUCCESS status, or a wrong shape", () => {
-    assert.deepEqual(parseAgyModelsList("not json"), []);
-    assert.deepEqual(
+  it("returns undefined on malformed JSON, non-SUCCESS status, or a wrong shape", () => {
+    assert.equal(parseAgyModelsList("not json"), undefined);
+    assert.equal(
       parseAgyModelsList(JSON.stringify({ status: "ERROR", command: { data: { models: [] } } })),
-      []
+      undefined
     );
-    assert.deepEqual(parseAgyModelsList(JSON.stringify({ status: "SUCCESS" })), []);
-    assert.deepEqual(
+    assert.equal(parseAgyModelsList(JSON.stringify({ status: "SUCCESS" })), undefined);
+    assert.equal(
       parseAgyModelsList(JSON.stringify({ status: "SUCCESS", command: { data: { models: "nope" } } })),
+      undefined
+    );
+  });
+
+  it("returns [] only for a SUCCESS response with a genuinely empty list", () => {
+    assert.deepEqual(
+      parseAgyModelsList(JSON.stringify({ status: "SUCCESS", command: { data: { models: [] } } })),
       []
     );
   });
@@ -436,5 +447,41 @@ describe("parseLine", () => {
 
   it("ignores malformed JSON", () => {
     assert.deepEqual(parseLine("not json"), []);
+  });
+});
+
+describe("refreshAgyModels", () => {
+  const bin = mkdtempSync(join(tmpdir(), "pi-minion-agy-"));
+  const realPath = process.env.PATH;
+  const fakeAgy = (payload: string) => {
+    writeFileSync(join(bin, "agy"), `#!/bin/sh\necho '${payload}'\n`);
+    chmodSync(join(bin, "agy"), 0o755);
+    process.env.PATH = `${bin}:${realPath}`;
+  };
+  // Expired snapshot so refreshAgyModels actually spawns the fake agy.
+  const seedExpired = () => setAgyModelsForTesting(AGY_CATALOG, 0);
+
+  it("keeps the previous snapshot when agy answers with a non-SUCCESS status", async () => {
+    seedExpired();
+    fakeAgy('{"status":"ERROR","response":"not logged in"}');
+    try {
+      await refreshAgyModels();
+      assert.equal(ownsModel("gpt-oss"), true);
+    } finally {
+      process.env.PATH = realPath;
+      setAgyModelsForTesting(AGY_CATALOG);
+    }
+  });
+
+  it("empties the snapshot only on a successful empty response", async () => {
+    seedExpired();
+    fakeAgy('{"status":"SUCCESS","command":{"data":{"models":[]}}}');
+    try {
+      await refreshAgyModels();
+      assert.equal(ownsModel("gpt-oss"), false);
+    } finally {
+      process.env.PATH = realPath;
+      setAgyModelsForTesting(AGY_CATALOG);
+    }
   });
 });

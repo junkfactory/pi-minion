@@ -35,3 +35,23 @@ export function resolveAdapterForModel(model: string): AgentCliAdapter {
   }
   return adapter;
 }
+
+// A run can land before session_start's fire-and-forget catalog refresh has
+// populated a catalog (help_pi_minion awaits the same refreshes, so it lists
+// models the run would call unknown). One awaited refresh, then the original
+// error — the retry's error would be identical, so rethrow the first.
+export async function resolveAdapterForModelRefreshed(
+  model: string,
+  refresh: () => Promise<unknown>
+): Promise<AgentCliAdapter> {
+  try {
+    return resolveAdapterForModel(model);
+  } catch (error) {
+    await refresh();
+    try {
+      return resolveAdapterForModel(model);
+    } catch {
+      throw error;
+    }
+  }
+}

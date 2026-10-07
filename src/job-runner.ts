@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { JobUI, StepRunStats } from "./agent.ui.js";
 import type { MinionConfig, MinionRequest, TokenCounts, UsageTotals } from "./adapters/types.js";
 import { resolveTaskText, truncate } from "./adapters/util.js";
-import { resolveAdapterForModel } from "./adapters/registry.js";
+import { listAdapters, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
 import { writeChildSession } from "./child-session.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
@@ -115,7 +115,12 @@ export async function startJob(
   pruneJobMeta(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
   pruneWorkflows(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
   const validRequest = await validateRequest(request, cwd, config);
-  const adapter = resolveAdapterForModel(validRequest.model);
+  // help_pi_minion awaits every adapter's catalog refresh before listing
+  // models; a run must not declare a model unknown against a catalog that
+  // session_start's fire-and-forget refresh hasn't populated yet.
+  const adapter = await resolveAdapterForModelRefreshed(validRequest.model, () =>
+    Promise.all(listAdapters().map((candidate) => candidate.refreshCatalog?.()))
+  );
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
   const title = workflowStep?.title ?? deriveJobTitle(request.task);
