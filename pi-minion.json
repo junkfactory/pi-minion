@@ -1,7 +1,6 @@
 {
-  "blockedModels": [],
+  "models": { "allowed": [], "blocked": [] },
   "providers": { "allowed": [], "blocked": [] },
-  "allowedModels": [],
   "allowedTools": [
     "Bash",
     "Edit",

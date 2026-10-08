@@ -13,19 +13,20 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 export type AdapterArgs = { args: string[]; preExec: string[] };
 
 export type MinionConfig = {
-  allowedModels: string[];
-  // Denylist taking precedence over allowedModels. Entries are exact model
-  // ids or a trailing-'*' prefix pattern ("gemini*" blocks gemini-flash,
-  // gemini-pro, ...). Checked before allowedModels; empty/absent = nothing
-  // blocked. Merged wholesale like allowedModels.
-  blockedModels?: string[];
+  // Model-id filter: { allowed?: string[]; blocked?: string[] }, symmetric
+  // with providers. Entries are exact model ids or a trailing-'*' prefix
+  // pattern ("gemini*" matches gemini-flash, gemini-pro, ...). blocked wins
+  // over allowed; empty/absent allowed = no allowlist (every routable model
+  // passes); empty/absent blocked = nothing blocked. Replaced wholesale by
+  // user override.
+  models?: { allowed?: string[]; blocked?: string[] };
   // Provider-level model filter: { allowed?: string[]; blocked?: string[] }
   // of provider names — "claude" (claude adapter), "antigravity" (agy), or
   // a pi catalog entry's provider ("opencode-go", "openai-codex", ...).
   // blocked wins over allowed; empty/absent allowed = no allowlist;
   // empty/absent blocked = nothing blocked. Applied to help_pi_minion's
   // list and to validateRequest, same hide-and-reject contract as
-  // allowedModels/blockedModels. Replaced wholesale by user override.
+  // models.allowed/models.blocked. Replaced wholesale by user override.
   providers?: { allowed?: string[]; blocked?: string[] };
   allowedTools: string[];
   maxBudgetUsd: number;
@@ -109,6 +110,9 @@ export type AdapterCapabilities = {
 // catalogs (claude.ts, agy.ts, pi.ts) must not leak beyond it — outside code
 // goes through ./registry.ts and addresses adapters only via these members,
 // never by importing a specific adapter module or naming a CLI.
+// Adapters are FACTORIES instantiated with a MinionConfig (e.g.
+// createClaudeAdapter(config)), never static objects — the config belongs to
+// the closure so every predicate/method below is evaluated against it.
 export interface AgentCliAdapter {
   readonly name: string;
   // The binary to spawn (e.g. "claude"/"agy") — a CLI-intrinsic fact, same
@@ -125,18 +129,22 @@ export interface AgentCliAdapter {
   // naming this CLI's own denial mechanism.
   readonly permissionDeniedWarning: string;
   readonly capabilities: AdapterCapabilities;
-  // Does this adapter's CLI recognize/handle this model string? Hardcoded per
-  // adapter (e.g. claude's short aliases + "claude-*" ids) — a fact about the
-  // CLI, not a user-configurable knob, which is why it lives in code rather
-  // than pi-minion.json.
+  // Does this adapter's CLI recognize/handle this model string, gated
+  // against the config the adapter was instantiated with:
+  // rawOwnsModel(model) plus the provider/model gates on that config. The
+  // ungated, CLI-intrinsic claim lives in rawOwnsModel.
   ownsModel(model: string): boolean;
+  // Ungated claim that this adapter's CLI recognizes/handles this model
+  // string. Hardcoded per adapter (e.g. claude's short aliases + "claude-*"
+  // ids) — a fact about the CLI, not a user-configurable knob, which is why
+  // it lives in code rather than pi-minion.json. Config gating (providers /
+  // models) is layered on top in ownsModel.
+  rawOwnsModel(model: string): boolean;
   // Model strings this adapter contributes to help_pi_minion's "allow all"
-  // universe when allowedModels is empty. Distinct from ownsModel:
-  // ownsModel is a predicate (accepts e.g. any future "claude-foo" id),
-  // availableIds is an enumeration of what's reasonable to suggest today.
-  // Optional — adapters that don't ship with the user-callable aliases (e.g.
-  // a future CLI that routes only version-resolved live ids) leave it off.
-  availableIds?(): string[];
+  // universe: allowed∩rawOwns when models.allowed is non-empty, otherwise
+  // the adapter's own enumeration of what's reasonable to suggest today,
+  // both piped through the config-bound provider/model filter chain.
+  availableModels(): string[];
   // Provider identities for this model string as this adapter routes it —
   // called only on the adapter that owns the model (registry claim order).
   // [] = unidentifiable (callers keep the model). Optional — adapters

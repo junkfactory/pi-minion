@@ -48,6 +48,21 @@ process.env.PATH = `${bin}:${realPath}`;
 const { startJob, validateRequest } = await import("../src/job-runner.js");
 const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, stopJob } = await import("../src/job-store.js");
 const { startWorkflowSession } = await import("../src/child-session.js");
+const { setAdaptersForTest } = await import("../src/adapters/registry.js");
+const { createClaudeAdapter } = await import("../src/adapters/claude.js");
+const { createPiAdapter } = await import("../src/adapters/pi.js");
+const { createFakeAdapter, fakeConfig } = await import("./fakes.js");
+
+// Pin config-bound adapters so ensureRegistry no-ops: validateRequest and
+// startJob resolve against these instead of whatever CLIs happen to be
+// installed on this machine. Permissive configs — the gates each call applies
+// come from the config it passes in, not the adapter's own.
+const permissive = () => fakeConfig({ models: { allowed: [], blocked: [] } });
+setAdaptersForTest([
+  createClaudeAdapter(permissive()),
+  createPiAdapter(permissive()),
+  createFakeAdapter(permissive())
+]);
 
 type Post = { content: string; triggerTurn: boolean };
 type Outcome = { finalResult?: string; reportPath?: string; errorReason?: string; ok: boolean } & Partial<StepRunStats>;
@@ -84,8 +99,7 @@ function waitFor(cond: () => boolean, ms = 10_000): Promise<void> {
 describe("validateRequest providers gate", () => {
   // Minimal well-formed MinionConfig for the provider gate (mirrors test/fakes.ts).
   const configWith = (providers: { allowed?: string[]; blocked?: string[] }) => ({
-    allowedModels: ["sonnet"],
-    blockedModels: [],
+    models: { allowed: ["sonnet"], blocked: [] },
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
@@ -126,14 +140,24 @@ describe("validateRequest providers gate", () => {
         validateRequest(
           { ...request, model: "luna" },
           workspace,
-          { ...configWith({ blocked: ["opencode-go"] }), allowedModels: [] }
+          { ...configWith({ blocked: ["opencode-go"] }), models: { allowed: [] } }
         ),
         /excluded by the providers config/
       );
       await validateRequest(
         { ...request, model: "luna" },
         workspace,
-        { ...configWith({ blocked: ["antigravity"] }), allowedModels: [] }
+        { ...configWith({ blocked: ["antigravity"] }), models: { allowed: [] } }
+      );
+      // Order: a string blocked at BOTH the provider and model level reports
+      // the providers message — the providers gate runs before models.blocked.
+      await assert.rejects(
+        validateRequest(
+          { ...request, model: "luna" },
+          workspace,
+          { ...configWith({ blocked: ["opencode-go"] }), models: { allowed: [], blocked: ["luna*"] } }
+        ),
+        /excluded by the providers config/
       );
     } finally {
       setModelRegistry(undefined);

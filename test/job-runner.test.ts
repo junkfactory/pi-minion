@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
 import { validateRequest } from "../src/job-runner.js";
-import { fakeConfig, fakeRequest } from "./fakes.js";
+import { createFakeAdapter, fakeConfig, fakeRequest } from "./fakes.js";
 
 describe("validateRequest", () => {
+  // Pin a config-bound fake so ensureRegistry no-ops: no machine-CLI discovery
+  // mid-suite, and providersOfModel() can't depend on what's installed here.
+  before(() => setAdaptersForTest([createFakeAdapter(fakeConfig())]));
+  after(() => setAdaptersForTest());
+
   it("rejects a workspace that doesn't match cwd", async () => {
     await assert.rejects(
       validateRequest(fakeRequest({ workspace: "/tmp/a" }), "/tmp/b", fakeConfig()),
@@ -25,7 +31,7 @@ describe("validateRequest", () => {
     }
   });
 
-  it("rejects a model outside allowedModels", async () => {
+  it("rejects a model outside models.allowed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
       await assert.rejects(
@@ -37,14 +43,14 @@ describe("validateRequest", () => {
     }
   });
 
-  it("rejects a blocked model with the blockedModels message", async () => {
+  it("rejects a blocked model with the models.blocked message", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
       await assert.rejects(
         validateRequest(
           fakeRequest({ workspace: dir, model: "gemini-pro" }),
           dir,
-          fakeConfig({ blockedModels: ["gemini*"] })
+          fakeConfig({ models: { blocked: ["gemini*"] } })
         ),
         /Model is blocked:/
       );
@@ -60,7 +66,7 @@ describe("validateRequest", () => {
         validateRequest(
           fakeRequest({ workspace: dir, model: "gemini-pro" }),
           dir,
-          fakeConfig({ allowedModels: ["sonnet"], blockedModels: [] })
+          fakeConfig({ models: { allowed: ["sonnet"], blocked: [] } })
         ),
         /Model is not allowed:/
       );
@@ -69,13 +75,13 @@ describe("validateRequest", () => {
     }
   });
 
-  it("allows any model when allowedModels is empty (allow-all default)", async () => {
+  it("allows any model when models.allowed is empty (allow-all default)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
       await validateRequest(
         fakeRequest({ workspace: dir, model: "any-catalog-id" }),
         dir,
-        fakeConfig({ allowedModels: [] })
+        fakeConfig({ models: { allowed: [] } })
       );
     } finally {
       await rm(dir, { recursive: true });

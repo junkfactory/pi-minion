@@ -60,10 +60,9 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   const adapterArgs =
     config.adapterArgs === undefined ? undefined : normalizeAdapterArgs(config.adapterArgs);
   if (
-    !Array.isArray(config.allowedModels) ||
     !Array.isArray(config.allowedTools) ||
-    (config.blockedModels !== undefined && !Array.isArray(config.blockedModels)) ||
-    (config.providers !== undefined && !isProvidersShape(config.providers)) ||
+    (config.models !== undefined && !isAllowDenyShape(config.models)) ||
+    (config.providers !== undefined && !isAllowDenyShape(config.providers)) ||
     (config.adapterArgs !== undefined && adapterArgs === undefined)
   ) {
     throw new Error(
@@ -76,24 +75,29 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   return config;
 }
 
-// Empty allowedModels means "no static allowlist": every model a present
+// Empty models.allowed means "no static allowlist": every model a present
 // adapter can own is allowed (with the pi adapter routing against the live
 // catalog, that's every credential-available model on this machine; unknown
 // ids still fail at startJob with "Unknown model"). A non-empty list is a
 // strict whitelist — entries may carry the same trailing-'*' wildcard as
-// blockedModels.
+// models.blocked.
 // Trailing '*' = prefix match ("gemini*" → startsWith("gemini"));
 // no '*' = exact match. A leading '*' would also be a prefix match of
 // the remainder, so guard: only a TRAILING '*' is a wildcard.
+// Matching is on the raw request string: a provider-qualified
+// "opencode-go/gpt-6-luna" must be listed (or covered by a pattern like
+// "opencode-go/*") to pass a non-empty allowlist — help and validateRequest
+// apply the same rule.
 function modelMatchesPattern(model: string, pattern: string): boolean {
   return pattern.endsWith("*")
     ? model.startsWith(pattern.slice(0, -1))
     : model === pattern;
 }
 
-// Validates { allowed?: string[]; blocked?: string[] } without
-// normalizing: the isProvider* helpers default each missing side to [].
-function isProvidersShape(value: unknown): boolean {
+// Validates the { allowed?: string[]; blocked?: string[] } filter blocks
+// (models, providers) without normalizing: the isModel*/isProvider* helpers
+// default each missing side to [].
+function isAllowDenyShape(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const { allowed, blocked } = value as { allowed?: unknown; blocked?: unknown };
   const strings = (v: unknown) => v === undefined || (Array.isArray(v) && v.every((i) => typeof i === "string"));
@@ -120,19 +124,14 @@ function normalizeAdapterArgs(value: unknown): Record<string, AdapterArgs> | und
   return out;
 }
 
-export function isModelBlocked(
-  config: Pick<MinionConfig, "blockedModels">,
-  model: string
-): boolean {
-  return (config.blockedModels ?? []).some((p) => modelMatchesPattern(model, p));
+export function isModelBlocked(config: Pick<MinionConfig, "models">, model: string): boolean {
+  return (config.models?.blocked ?? []).some((p) => modelMatchesPattern(model, p));
 }
 
-export function isModelAllowed(
-  config: Pick<MinionConfig, "allowedModels" | "blockedModels">,
-  model: string
-): boolean {
+export function isModelAllowed(config: Pick<MinionConfig, "models">, model: string): boolean {
   if (isModelBlocked(config, model)) return false;
-  return config.allowedModels.length === 0 || config.allowedModels.some((p) => modelMatchesPattern(model, p));
+  const allowed = config.models?.allowed ?? [];
+  return allowed.length === 0 || allowed.some((p) => modelMatchesPattern(model, p));
 }
 
 export function isProviderBlocked(

@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildArgs,
+  createClaudeAdapter,
   initModel,
   isTextBlockStart,
   isThinkingDelta,
-  ownsModel,
+  rawOwnsModel,
   streamedMessageDeltaTokens,
   streamedResult,
   streamedText,
@@ -18,7 +19,7 @@ import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    allowedModels: ["sonnet", "opus"],
+    models: { allowed: ["sonnet", "opus"] },
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
@@ -36,17 +37,48 @@ function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionRequest {
   } as MinionRequest;
 }
 
-describe("ownsModel", () => {
+describe("rawOwnsModel", () => {
   it("recognizes claude's short aliases and any claude-* id", () => {
-    assert.equal(ownsModel("opus"), true);
-    assert.equal(ownsModel("sonnet"), true);
-    assert.equal(ownsModel("haiku"), true);
-    assert.equal(ownsModel("fable"), true);
-    assert.equal(ownsModel("claude-haiku-4-5-20251001"), true);
+    const adapter = createClaudeAdapter(fakeConfig());
+    assert.equal(adapter.rawOwnsModel("opus"), true);
+    assert.equal(adapter.rawOwnsModel("sonnet"), true);
+    assert.equal(adapter.rawOwnsModel("haiku"), true);
+    assert.equal(adapter.rawOwnsModel("fable"), true);
+    assert.equal(adapter.rawOwnsModel("claude-haiku-4-5-20251001"), true);
   });
 
   it("returns false for an unrelated model string", () => {
-    assert.equal(ownsModel("gemini-3.8-flash-high"), false);
+    assert.equal(rawOwnsModel("gemini-3.8-flash-high"), false);
+  });
+});
+
+describe("ownsModel / availableModels (config-gated)", () => {
+  it("gates ownsModel against the bound config without touching the raw claim", () => {
+    const adapter = createClaudeAdapter(
+      fakeConfig({ models: { allowed: [], blocked: ["sonnet"] } })
+    );
+    assert.equal(adapter.ownsModel("sonnet"), false);
+    assert.equal(adapter.rawOwnsModel("sonnet"), true);
+  });
+
+  it("availableModels intersects an allowlist with rawOwnsModel", () => {
+    const adapter = createClaudeAdapter(
+      fakeConfig({ models: { allowed: ["claude-haiku-5-5", "gemini*"], blocked: [] } })
+    );
+    assert.ok(adapter.availableModels().includes("claude-haiku-5-5"));
+    assert.ok(!adapter.availableModels().includes("gemini-3.8-flash-high"));
+  });
+
+  it("availableModels lists the four aliases when the allowlist is empty", () => {
+    const adapter = createClaudeAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }));
+    assert.deepEqual(adapter.availableModels(), ["opus", "sonnet", "haiku", "fable"]);
+  });
+
+  it("availableModels is empty when the provider is config-blocked", () => {
+    const adapter = createClaudeAdapter(
+      fakeConfig({ models: { allowed: [], blocked: [] }, providers: { allowed: [], blocked: ["claude"] } })
+    );
+    assert.deepEqual(adapter.availableModels(), []);
   });
 });
 

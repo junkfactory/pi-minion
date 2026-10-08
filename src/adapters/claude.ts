@@ -2,13 +2,14 @@ import type {
   AdapterCapabilities,
   AgentCliAdapter,
   ModelBreakdown,
-  NormalizedEvent,
   MinionConfig,
+  NormalizedEvent,
   MinionRequest,
   TokenCounts,
   UsageTotals
 } from "./types.js";
-import { MINION_PROMPT_BASE, resolveTaskText, sumFields } from "./util.js";
+import { MINION_PROMPT_BASE, resolveTaskText, selectAvailableModels, sumFields } from "./util.js";
+import { isModelAllowed, isProviderAllowed } from "../config.js";
 
 // Exact wording from the `claude` CLI binary (v2.1.236), not a documented
 // contract. A future CLI upgrade can reword this and silently break
@@ -17,20 +18,16 @@ const PERMISSION_DENIAL_MARKER = "denied by the Claude Code auto mode classifier
 
 const CLAUDE_MODEL_ALIASES = new Set(["opus", "sonnet", "haiku", "fable"]);
 
-export function ownsModel(model: string): boolean {
+// Ungated claim: the claude CLI recognizes these aliases and any "claude-*"
+// id. Config gating (providers/models) is layered on top in ownsModel and
+// availableModels.
+export function rawOwnsModel(model: string): boolean {
   return CLAUDE_MODEL_ALIASES.has(model) || /^claude-/i.test(model);
-}
-
-// Stays in sync with CLAUDE_MODEL_ALIASES — both come from the same `claude`
-// CLI release. The help universe lists aliases; literal "claude-*" ids only
-// appear if a user pins them, so they're not enumerated here.
-export function availableIds(): string[] {
-  return [...CLAUDE_MODEL_ALIASES];
 }
 
 // Everything this adapter runs goes through the claude CLI — one provider
 // by construction, for aliases and "claude-*" ids alike.
-export function providersOf(): string[] {
+export function providersOf(_model: string): string[] {
   return ["claude"];
 }
 
@@ -393,21 +390,38 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
   return [];
 }
 
-export const claudeAdapter: AgentCliAdapter = {
-  name: "Claude",
-  command: "claude",
-  description: "Anthropic's Claude Code CLI",
-  installHint: "see https://code.claude.com/docs/en/setup.md for installation instructions",
-  rawOutputHint:
-    'raw stream-json, one JSON object per line; assistant text is in "stream_event" lines under event.delta.text where delta.type is "text_delta".',
-  permissionDeniedWarning:
-    "one or more actions were denied by the auto-mode permission classifier during this run; the result below may be incomplete.",
-  capabilities,
-  ownsModel,
-  availableIds,
-  providersOf,
-  buildArgs,
-  environment,
-  parseLine,
-  describeUnsupported
-};
+export function createClaudeAdapter(config: MinionConfig): AgentCliAdapter {
+  // Provider gate against the bound config: providersOf "[]" = keep
+  // (unidentifiable), otherwise every provider must pass isProviderAllowed.
+  const providerGate = (model: string) => {
+    const providers = providersOf(model);
+    return providers.length === 0 || providers.every((p) => isProviderAllowed(config, p));
+  };
+  return {
+    name: "Claude",
+    command: "claude",
+    description: "Anthropic's Claude Code CLI",
+    installHint: "see https://code.claude.com/docs/en/setup.md for installation instructions",
+    rawOutputHint:
+      'raw stream-json, one JSON object per line; assistant text is in "stream_event" lines under event.delta.text where delta.type is "text_delta".',
+    permissionDeniedWarning:
+      "one or more actions were denied by the auto-mode permission classifier during this run; the result below may be incomplete.",
+    capabilities,
+    ownsModel(model) {
+      return rawOwnsModel(model) && providerGate(model) && isModelAllowed(config, model);
+    },
+    rawOwnsModel,
+    availableModels() {
+      const base =
+        config.models?.allowed?.length
+          ? config.models.allowed.filter(rawOwnsModel)
+          : [...CLAUDE_MODEL_ALIASES];
+      return selectAvailableModels(base, config, providersOf);
+    },
+    providersOf,
+    buildArgs,
+    environment,
+    parseLine,
+    describeUnsupported
+  };
+}

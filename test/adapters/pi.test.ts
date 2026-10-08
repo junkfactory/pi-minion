@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import {
-  availableModelIds,
   buildArgs,
+  createPiAdapter,
   describeUnsupported,
   environment,
-  ownsModel,
   parseLine,
+  rawOwnsModel,
   setModelRegistry
 } from "../../src/adapters/pi.js";
 import { fakeModelRegistry } from "../fakes.js";
@@ -14,7 +14,7 @@ import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    allowedModels: ["gpt-6-luna", "gpt-5.6-terra"],
+    models: { allowed: ["gpt-6-luna", "gpt-5.6-terra"] },
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
@@ -37,6 +37,11 @@ function flagValue(args: string[], flag: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
+// Ownership/enumeration assertions are about the CLI-intrinsic claim, so
+// they run on an adapter built with empty filters; the config-gated cases
+// below build their own.
+const ungated = createPiAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }));
+
 describe("ownsModel", () => {
   beforeEach(() => {
     setModelRegistry(
@@ -54,34 +59,80 @@ describe("ownsModel", () => {
   });
 
   it("claims bare ids that exist in the available catalog", () => {
-    assert.equal(ownsModel("gpt-6-luna"), true);
-    assert.equal(ownsModel("GPT-6-LUNA"), true);
+    assert.equal(ungated.ownsModel("gpt-6-luna"), true);
+    assert.equal(ungated.ownsModel("GPT-6-LUNA"), true);
   });
 
   it("claims provider/id references that exist in the catalog", () => {
-    assert.equal(ownsModel("openai-codex/gpt-6.1-sol"), true);
-    assert.equal(ownsModel("amazon-bedrock/global.anthropic.claude-opus-5-5"), false);
+    assert.equal(ungated.ownsModel("openai-codex/gpt-6.1-sol"), true);
+    assert.equal(ungated.ownsModel("amazon-bedrock/global.anthropic.claude-opus-5-5"), false);
   });
 
   it("claims provider/alias references pi itself resolves (opencode-go/luna → gpt-6-luna)", () => {
     // pi accepts provider/alias (`pi auth check --model opencode-go/luna` →
     // ready), so a bare `id ===` slash match would reject a model pi runs.
-    assert.equal(ownsModel("opencode-go/luna"), true);
-    assert.equal(ownsModel("opencode-go/gpt-6-luna"), true);
-    assert.equal(ownsModel("openai-codex/luna"), false);
-    assert.equal(ownsModel("opencode-go/sol"), false);
+    assert.equal(ungated.ownsModel("opencode-go/luna"), true);
+    assert.equal(ungated.ownsModel("opencode-go/gpt-6-luna"), true);
+    assert.equal(ungated.ownsModel("openai-codex/luna"), false);
+    assert.equal(ungated.ownsModel("opencode-go/sol"), false);
   });
 
   it("claims short aliases a catalog id ends with (pi fuzzy-matches at spawn)", () => {
-    assert.equal(ownsModel("luna"), true);
-    assert.equal(ownsModel("sol"), true);
-    assert.equal(ownsModel("terra"), false);
-    assert.equal(ownsModel("astra"), false);
+    assert.equal(ungated.ownsModel("luna"), true);
+    assert.equal(ungated.ownsModel("sol"), true);
+    assert.equal(ungated.ownsModel("terra"), false);
+    assert.equal(ungated.ownsModel("astra"), false);
   });
 
-  it("enumerates trailing-token aliases before bare ids for help_pi_minion", () => {
-    // Version- and effort-shaped trailing tokens ("5" from
-    // claude-opus-5-5) are not aliases — piAliasCandidates skips them.
+  it("gates ownsModel against the bound config without touching the raw claim", () => {
+    const adapter = createPiAdapter(
+      fakeConfig({ models: { allowed: [], blocked: ["gpt-6-luna"] } })
+    );
+    assert.equal(adapter.ownsModel("gpt-6-luna"), false);
+    assert.equal(adapter.rawOwnsModel("gpt-6-luna"), true);
+  });
+
+  it("claims nothing without a captured registry", () => {
+    setModelRegistry(undefined);
+    assert.equal(ungated.ownsModel("gpt-6-luna"), false);
+    assert.equal(ungated.ownsModel("luna"), false);
+    assert.equal(ungated.ownsModel("openai-codex/gpt-6.1-sol"), false);
+  });
+
+  it("claude/gemini ids stay with the claude and agy adapters by check order", () => {
+    assert.equal(ungated.ownsModel("claude-sonnet-5-5"), true);
+    assert.equal(ungated.ownsModel("gpt-oss"), false);
+    assert.equal(ungated.ownsModel("gpt-oss-120b"), false);
+    assert.equal(ungated.ownsModel("haiku"), false);
+    assert.equal(ungated.ownsModel("gemini-flash"), false);
+  });
+});
+
+describe("rawOwnsModel / availableModels (config-gated)", () => {
+  beforeEach(() => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-5.6-luna", provider: "opencode-go" },
+        { id: "gpt-6.1-sol", provider: "openai-codex" }
+      ])
+    );
+  });
+
+  afterEach(() => {
+    setModelRegistry(undefined);
+  });
+
+  it("raw claim is ungated (a config-blocked model stays a raw claim)", () => {
+    assert.equal(rawOwnsModel("gpt-6-luna"), true);
+    assert.equal(rawOwnsModel("luna"), true);
+    assert.equal(rawOwnsModel("totally-unknown"), false);
+  });
+
+  it("enumerates exact catalog ids then provider-qualified pairs (never derived aliases) for help_pi_minion", () => {
+    // Aliases like "luna"/"sol"/"pro" are deliberately absent: pi
+    // fuzzy-resolves them at spawn, so enumerating one could drift to a
+    // different version over time.
     setModelRegistry(
       fakeModelRegistry([
         { id: "gpt-6-luna", provider: "openai-codex" },
@@ -91,33 +142,38 @@ describe("ownsModel", () => {
       ])
     );
     try {
-      assert.deepEqual(availableModelIds(), [
-        "luna",
-        "sol",
-        "pro",
+      assert.deepEqual(ungated.availableModels(), [
         "gpt-6-luna",
         "gpt-6.1-sol",
         "gemini-3.1-pro",
-        "claude-opus-5-5"
+        "claude-opus-5-5",
+        "openai-codex/gpt-6-luna",
+        "openai-codex/gpt-6.1-sol",
+        "google/gemini-3.1-pro",
+        "anthropic/claude-opus-5-5"
       ]);
     } finally {
       setModelRegistry(undefined);
     }
   });
 
-  it("claims nothing without a captured registry", () => {
-    setModelRegistry(undefined);
-    assert.equal(ownsModel("gpt-6-luna"), false);
-    assert.equal(ownsModel("luna"), false);
-    assert.equal(ownsModel("openai-codex/gpt-6.1-sol"), false);
+  it("intersects an allowlist with the raw claim, even for a non-enumerated alias", () => {
+    // "luna" is raw-owned (a catalog id ends with it) but deliberately not
+    // enumerated in the default universe — an explicit allowlist that names
+    // it still surfaces it.
+    const adapter = createPiAdapter(fakeConfig({ models: { allowed: ["luna", "totally-unknown"], blocked: [] } }));
+    assert.deepEqual(adapter.availableModels(), ["luna"]);
   });
 
-  it("claude/gemini ids stay with the claude and agy adapters by check order", () => {
-    assert.equal(ownsModel("claude-sonnet-5-5"), true);
-    assert.equal(ownsModel("gpt-oss"), false);
-    assert.equal(ownsModel("gpt-oss-120b"), false);
-    assert.equal(ownsModel("haiku"), false);
-    assert.equal(ownsModel("gemini-flash"), false);
+  it("is empty when every provider is config-blocked", () => {
+    const adapter = createPiAdapter(
+      fakeConfig({
+        models: { allowed: [], blocked: [] },
+        providers: { allowed: [], blocked: ["opencode-go", "openai-codex"] }
+      })
+    );
+    assert.deepEqual(adapter.availableModels(), []);
+    assert.equal(adapter.ownsModel("gpt-6-luna"), false);
   });
 });
 

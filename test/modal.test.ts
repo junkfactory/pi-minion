@@ -3,10 +3,14 @@ import { describe, it } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeAdapter } from "../src/adapters/claude.js";
+import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createJobUI } from "../src/agent.ui.js";
 import { backfillModal, cancelWorkflowMessage } from "../src/modal.js";
-import { fakeCtx, fakeTheme, fakeTui } from "./fakes.js";
+import { fakeConfig, fakeCtx, fakeTheme, fakeTui } from "./fakes.js";
+
+// backfillModal only consumes the adapter's parseLine; a permissive
+// config-bound instance replaces the deleted static export.
+const claudeAdapter = createClaudeAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }));
 
 function renderReopenedModalLines(state: { customFactory: any }): string[] {
   const component = state.customFactory!(fakeTui(), fakeTheme(), {}, () => {}) as {

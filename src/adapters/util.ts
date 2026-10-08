@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { MinionRequest } from "./types.js";
+import type { MinionConfig, MinionRequest } from "./types.js";
+import { isModelAllowed, isProviderAllowed } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,6 +45,22 @@ export async function commandExists(command: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// Shared config-bound filter chain for an adapter's availableModels() base:
+// provider gate first (own providersOf + isProviderAllowed; providers "[]" =
+// keep, i.e. unidentifiable strings slip through), then isModelAllowed
+// (models.blocked, then allowed membership).
+export function selectAvailableModels(
+  base: string[],
+  config: Pick<MinionConfig, "models" | "providers">,
+  providersOf: (model: string) => string[]
+): string[] {
+  return base.filter(
+    (model) =>
+      (providersOf(model).length === 0 || providersOf(model).every((p) => isProviderAllowed(config, p))) &&
+      isModelAllowed(config, model)
+  );
 }
 
 // ---- Derived alias clusters (shared by the agy and pi adapters) ----

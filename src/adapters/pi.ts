@@ -9,7 +9,8 @@ import type {
   UsageTotals
 } from "./types.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MINION_PROMPT_BASE, EFFORT_RANK, resolveTaskText, sumFields } from "./util.js";
+import { MINION_PROMPT_BASE, resolveTaskText, sumFields, selectAvailableModels } from "./util.js";
+import { isModelAllowed, isProviderAllowed } from "../config.js";
 
 // Captured from the extension ctx by pi-minion.ts's session_start handler
 // (same capture-and-refresh shape as jobUI's setCtx): the parent pi process
@@ -22,32 +23,17 @@ export function setModelRegistry(registry: ModelRegistry | undefined): void {
   modelRegistry = registry;
 }
 
-// pi's alias rule is the TRAILING token ("luna" from gpt-6-luna — verified
-// against the pi CLI's own fuzzy matcher), NOT agy's version-stripped stem
-// ("gemini-flash" from gemini-3.8-flash-high), so the shared
-// deriveAliasClusters machinery in util.ts doesn't apply here; these few
-// lines derive pi's own alias universe instead. Version-shaped and
-// effort-shaped trailing tokens are skipped — "claude-sonnet-5-5" shouldn't
-// suggest "5", and no real model is named "medium".
-function piAliasCandidates(ids: string[]): string[] {
-  return [
-    ...new Set(
-      ids
-        .map((id) => id.split("-").pop() ?? "")
-        .filter((token) => token && !/^\d/.test(token) && !(token in EFFORT_RANK))
-    )
-  ];
-}
-
-// help_pi_minion's universe when allowedModels is empty: short aliases
-// first, then deduped bare ids of the available catalog. Resolution stays
-// delegated — the pi CLI fuzzy-matches at spawn ("--model luna" runs
-// gpt-6-luna over gpt-5.6-luna), so pi-minion only enumerates, never
-// resolves. Each entry is routable by some present adapter (registry check
-// order keeps claude/agy claims ahead of pi's).
-export function availableModelIds(): string[] {
-  const ids = [...new Set((modelRegistry?.getAvailable() ?? []).map((model) => model.id))];
-  return [...new Set([...piAliasCandidates(ids), ...ids])];
+// help_pi_minion's universe when models.allowed is empty: exact catalog
+// ids first, then provider/id pairs (pi's own disambiguation syntax).
+// Derived aliases ("luna") are deliberately NOT enumerated — pi
+// fuzzy-resolves them at spawn, so an alias can drift to a different
+// version over time; the caller should settle on an exact id with the
+// user instead. Aliases remain accepted at request time (ownsModel).
+function enumerateModelIds(): string[] {
+  const available = modelRegistry?.getAvailable() ?? [];
+  const ids = [...new Set(available.map((model) => model.id))];
+  const qualified = [...new Set(available.map((model) => `${model.provider}/${model.id}`))];
+  return [...ids, ...qualified];
 }
 
 // pi's --model accepts patterns (short alias names like "luna" fuzzy-match
@@ -65,7 +51,11 @@ export function availableModelIds(): string[] {
 // small local approximation: narrower than pi's fuzzy matching, which at
 // worst routes an exotic pattern to a clear "Unknown model" error instead of
 // a spawn-time failure.
-export function ownsModel(model: string): boolean {
+// Ungated, CLI-intrinsic claim (see the long header above for what pi
+// accepts): a bare catalog id, a provider/id reference, or an alias some
+// available id ends with. Config gating (providers/models) is layered on
+// top in ownsModel.
+export function rawOwnsModel(model: string): boolean {
   const available = modelRegistry?.getAvailable();
   if (!available) return false;
   const lower = model.toLowerCase();
@@ -316,22 +306,41 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
   ];
 }
 
-export const piAdapter: AgentCliAdapter = {
-  name: "pi",
-  command: "pi",
-  description: "The pi coding agent CLI — routes to OpenAI Codex (gpt-*) and any pi provider/id model",
-  installHint: "install with `npm install -g @earendil-works/pi-coding-agent`",
-  rawOutputHint:
-    'raw JSONL, one JSON object per line; assistant text streams in "message_update" lines under assistantMessageEvent.delta where assistantMessageEvent.type is "text_delta", and each completed answer is in "message_end" lines under message.content.',
-  permissionDeniedWarning:
-    "one or more actions were denied during this run; the result below may be incomplete.",
-  capabilities,
-  ownsModel,
-  availableIds: availableModelIds,
-  providersOf,
-  startSession: (ctx) => setModelRegistry(ctx.modelRegistry),
-  buildArgs,
-  environment,
-  parseLine,
-  describeUnsupported
-};
+export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
+  // Provider gate against the bound config: providersOf "[]" = keep
+  // (unidentifiable), otherwise every provider must pass isProviderAllowed.
+  const providerGate = (model: string) => {
+    const providers = providersOf(model);
+    return providers.length === 0 || providers.every((p) => isProviderAllowed(config, p));
+  };
+  return {
+    name: "pi",
+    command: "pi",
+    description: "The pi coding agent CLI — routes to OpenAI Codex (gpt-*) and any pi provider/id model",
+    installHint: "install with `npm install -g @earendil-works/pi-coding-agent`",
+    rawOutputHint:
+      'raw JSONL, one JSON object per line; assistant text streams in "message_update" lines under assistantMessageEvent.delta where assistantMessageEvent.type is "text_delta", and each completed answer is in "message_end" lines under message.content.',
+    permissionDeniedWarning:
+      "one or more actions were denied during this run; the result below may be incomplete.",
+    capabilities,
+    ownsModel(model) {
+      return rawOwnsModel(model) && providerGate(model) && isModelAllowed(config, model);
+    },
+    rawOwnsModel,
+    availableModels() {
+      // allowed∩rawOwns when models.allowed is non-empty, else exact
+      // catalog ids, then provider/id pairs (pi's own disambiguation
+      // syntax) — never derived aliases.
+      const base = config.models?.allowed?.length
+        ? config.models.allowed.filter(rawOwnsModel)
+        : enumerateModelIds();
+      return selectAvailableModels(base, config, providersOf);
+    },
+    providersOf,
+    startSession: (ctx) => setModelRegistry(ctx.modelRegistry),
+    buildArgs,
+    environment,
+    parseLine,
+    describeUnsupported
+  };
+}

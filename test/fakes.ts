@@ -1,10 +1,10 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import type { MinionConfig, MinionRequest } from "../src/adapters/types.js";
+import { isModelAllowed, isProviderAllowed } from "../src/config.js";
+import type { AgentCliAdapter, MinionConfig, MinionRequest } from "../src/adapters/types.js";
 
 export function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    allowedModels: ["sonnet", "opus"],
-    blockedModels: [],
+    models: { allowed: ["sonnet", "opus"], blocked: [] },
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
@@ -29,6 +29,51 @@ export function fakeModelRegistry(
   models: Array<{ id: string; provider: string }>
 ): ModelRegistry {
   return { getAvailable: () => models } as unknown as ModelRegistry;
+}
+
+// Factory-built AgentCliAdapter stand-in for tests outside the adapters/
+// subtree (registry/tools/job-runner): same config-bound factory shape as
+// the real adapters (createClaudeAdapter(config) etc.), so tests can pin a
+// closed-over instance without any real CLI or live catalog. Ownership is
+// hardcoded: raw claim on exact "fake-*" ids plus the "fake" alias,
+// provider "fakeprovider", gated ownsModel and a config-filtered
+// availableModels just like the real adapters.
+export function createFakeAdapter(config: MinionConfig): AgentCliAdapter {
+  const providersOf = (model: string) =>
+    model.toLowerCase().startsWith("fake-") || model === "fake" || model === "_fake" ? ["fakeprovider"] : [];
+  // [] = nothing parseable; the fake never parses the real CLI wire format.
+  return {
+    name: "fake",
+    command: "fake-cli",
+    description: "test double for AgentCliAdapter consumers",
+    installHint: "n/a",
+    rawOutputHint: "n/a",
+    permissionDeniedWarning: "",
+    capabilities: { supportsAllowedTools: true, supportsEffort: true, supportsMaxBudgetUsd: true },
+    rawOwnsModel: (model) => model.toLowerCase().startsWith("fake-") || model === "fake",
+    ownsModel(model) {
+      const providers = providersOf(model);
+      return (
+        this.rawOwnsModel(model) &&
+        (providers.length === 0 || providers.every((p) => isProviderAllowed(config, p))) &&
+        isModelAllowed(config, model)
+      );
+    },
+    availableModels() {
+      const base = (config.models?.allowed?.length
+        ? config.models.allowed.filter(this.rawOwnsModel)
+        : ["fake", "fake-model"]); // plausible "suggest these today" list
+      return base.filter(
+        (model) =>
+          (providersOf(model).every((p) => isProviderAllowed(config, p))) && isModelAllowed(config, model)
+      );
+    },
+    providersOf,
+    buildArgs: (request) => ["--model", request.model, "--", request.task],
+    environment: () => ({}),
+    parseLine: () => [],
+    describeUnsupported: () => []
+  };
 }
 
 // Minimal stand-ins for Pi's real Theme/TUI/ExtensionContext — only the

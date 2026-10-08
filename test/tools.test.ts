@@ -4,10 +4,10 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
-import { claudeAdapter } from "../src/adapters/claude.js";
-import { agyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
-import { piAdapter, setModelRegistry } from "../src/adapters/pi.js";
-import { fakeModelRegistry } from "./fakes.js";
+import { createClaudeAdapter } from "../src/adapters/claude.js";
+import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
+import { createPiAdapter, setModelRegistry } from "../src/adapters/pi.js";
+import { fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
   buildHelpModelList,
   PI_MINION_EXAMPLES,
@@ -62,36 +62,32 @@ describe("buildHelpModelList", () => {
       })
     )
   );
-  it("drops models whose adapter binary isn't present, keeps the rest", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: false }
-      ],
-      { allowedModels: ["sonnet", "opus", "gemini-flash"], blockedModels: [] }
-    );
+
+  // Adapters are config-bound factories now: the config each test used to
+  // pass alongside the candidate list goes into the factory instead. The
+  // permissive default mirrors fakeConfig()'s registry.test override.
+  const permissive = () => fakeConfig({ models: { allowed: [], blocked: [] } });
+  const claudeOf = (config = permissive()) => createClaudeAdapter(config);
+  const agyOf = (config = permissive()) => createAgyAdapter(config);
+  const piOf = (config = permissive()) => createPiAdapter(config);
+
+  it("only offers models of the adapters passed in (an absent adapter offers nothing)", () => {
+    const config = fakeConfig({ models: { allowed: ["sonnet", "opus", "gemini-flash"], blocked: [] } });
+    const result = buildHelpModelList([claudeOf(config)]);
     assert.deepEqual(result, ["sonnet", "opus"]);
   });
 
-  it("keeps allowedModels order across present adapters", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true }
-      ],
-      { allowedModels: ["gemini-flash", "sonnet", "gpt-oss"], blockedModels: [] }
-    );
-    assert.deepEqual(result, ["gemini-flash", "sonnet", "gpt-oss"]);
+  it("keeps models.allowed order within an adapter and unions across adapters", () => {
+    const config = fakeConfig({ models: { allowed: ["gemini-flash", "sonnet", "gpt-oss"], blocked: [] } });
+    const result = buildHelpModelList([claudeOf(config), agyOf(config)]);
+    assert.deepEqual(result, ["sonnet", "gemini-flash", "gpt-oss"]);
   });
 
-  it("returns an empty list when no candidate is present", () => {
-    assert.deepEqual(
-      buildHelpModelList([{ adapter: claudeAdapter, present: false }], { allowedModels: ["sonnet"], blockedModels: [] }),
-      []
-    );
+  it("returns an empty list when no adapter is registered", () => {
+    assert.deepEqual(buildHelpModelList([]), []);
   });
 
-  it("with an empty allowlist, lists available catalog ids the present adapters own", () => {
+  it("with an empty allowlist, lists available catalog ids the registered adapters own", () => {
     setModelRegistry(
       fakeModelRegistry([
         { id: "gpt-6-luna", provider: "opencode-go" },
@@ -99,18 +95,11 @@ describe("buildHelpModelList", () => {
       ])
     );
     try {
-      const result = buildHelpModelList(
-        [
-          { adapter: claudeAdapter, present: true },
-          { adapter: piAdapter, present: true }
-        ],
-        { allowedModels: [], blockedModels: [] }
-      );
+      const result = buildHelpModelList([claudeOf(), piOf()]);
       // claude's own aliases (sonnet/opus/haiku/fable) + pi's live catalog:
-      // its derived short alias (luna, from the trailing token of
-      // gpt-6-luna, deduped across providers) plus the bare id. Anything the
-      // adapters don't claim is filtered out.
-      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "luna", "gpt-6-luna"]);
+      // exact bare ids, then provider-qualified pairs, deduped across
+      // providers. Anything the adapters don't claim is filtered out.
+      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "gpt-6-luna", "opencode-go/gpt-6-luna", "other-go/gpt-6-luna"]);
     } finally {
       setModelRegistry(undefined);
     }
@@ -122,69 +111,41 @@ describe("buildHelpModelList", () => {
     // weren't listed when their CLIs were present, and "run opus minion"
     // later errored as an unsupported model.
     setModelRegistry(undefined);
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true },
-        { adapter: piAdapter, present: true }
-      ],
-      { allowedModels: [], blockedModels: [] }
-    );
+    const result = buildHelpModelList([claudeOf(), agyOf(), piOf()]);
     assert.ok(result.includes("opus"), "claude alias missing");
     assert.ok(result.includes("sonnet"), "claude alias missing");
-    assert.ok(result.includes("gemini-flash"), "agy alias missing");
-    assert.ok(result.includes("gpt-oss"), "agy alias missing");
+    assert.ok(result.includes("gemini-3.8-flash-high"), "agy id missing");
+    assert.ok(result.includes("gpt-oss-120b-medium"), "agy id missing");
   });
 
   it("filters blocked ids out of an explicit allowlist", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true }
-      ],
-      { allowedModels: ["sonnet", "gemini-flash"], blockedModels: ["gemini*"] }
-    );
+    const config = fakeConfig({ models: { allowed: ["sonnet", "gemini-flash"], blocked: ["gemini*"] } });
+    const result = buildHelpModelList([claudeOf(config), agyOf(config)]);
     assert.deepEqual(result, ["sonnet"]);
   });
 
   it("filters blocked ids out of the allow-all universe", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true }
-      ],
-      { allowedModels: [], blockedModels: ["gemini*"] }
-    );
+    const config = fakeConfig({ models: { allowed: [], blocked: ["gemini*"] } });
+    const result = buildHelpModelList([claudeOf(config), agyOf(config)]);
     assert.ok(result.includes("sonnet"), "sonnet missing");
     assert.ok(!result.some((model) => model.startsWith("gemini")), `gemini ids leaked: ${result.join(", ")}`);
   });
 
   it("filters out every model of a blocked provider", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true },
-        { adapter: piAdapter, present: true }
-      ],
-      { allowedModels: [], blockedModels: [], providers: { blocked: ["antigravity"] } }
-    );
+    const config = fakeConfig({ models: { allowed: [], blocked: [] }, providers: { blocked: ["antigravity"] } });
+    const result = buildHelpModelList([claudeOf(config), agyOf(config), piOf(config)]);
     assert.ok(result.includes("sonnet"), "claude models must survive an unrelated provider block");
-    assert.ok(!result.includes("gpt-oss"), `agy gpt-oss leaked: ${result.join(", ")}`);
+    assert.ok(!result.includes("gpt-oss-120b-medium"), `agy gpt-oss leaked: ${result.join(", ")}`);
     assert.ok(!result.includes("gemini-flash"), `agy gemini-flash leaked: ${result.join(", ")}`);
   });
 
   it("keeps only models of an allowlisted provider", () => {
-    const result = buildHelpModelList(
-      [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true },
-        { adapter: piAdapter, present: true }
-      ],
-      { allowedModels: [], blockedModels: [], providers: { allowed: ["claude"] } }
-    );
+    const config = fakeConfig({ models: { allowed: [], blocked: [] }, providers: { allowed: ["claude"] } });
+    const claude = claudeOf(config);
+    const result = buildHelpModelList([claude, agyOf(config), piOf(config)]);
     assert.ok(result.includes("sonnet"), "claude models missing");
     assert.ok(
-      result.every((model) => claudeAdapter.ownsModel(model)),
+      result.every((model) => claude.ownsModel(model)),
       `non-claude model leaked under providers.allowed=[claude]: ${result.join(", ")}`
     );
   });
@@ -197,25 +158,17 @@ describe("buildHelpModelList", () => {
       ])
     );
     try {
-      const candidates = [
-        { adapter: claudeAdapter, present: true },
-        { adapter: agyAdapter, present: true },
-        { adapter: piAdapter, present: true }
-      ];
-      const blocked = buildHelpModelList(candidates, {
-        allowedModels: [],
-        blockedModels: [],
-        providers: { blocked: ["opencode-go"] }
-      });
+      const blockedConfig = fakeConfig({ models: { allowed: [], blocked: [] }, providers: { blocked: ["opencode-go"] } });
+      const blocked = buildHelpModelList([claudeOf(blockedConfig), agyOf(blockedConfig), piOf(blockedConfig)]);
       assert.ok(!blocked.includes("luna"), `shared alias leaked over a blocked provider: ${blocked.join(", ")}`);
       assert.ok(!blocked.includes("gpt-6-luna"), `blocked provider's id leaked: ${blocked.join(", ")}`);
+      assert.ok(!blocked.includes("opencode-go/gpt-6-luna"), `blocked provider's qualified id leaked: ${blocked.join(", ")}`);
+      assert.ok(blocked.includes("amazon-bedrock/gpt-5.6-luna"), `unblocked provider's qualified id missing: ${blocked.join(", ")}`);
       assert.ok(blocked.includes("gpt-5.6-luna"), `unblocked provider's id missing: ${blocked.join(", ")}`);
-      const unrelated = buildHelpModelList(candidates, {
-        allowedModels: [],
-        blockedModels: [],
-        providers: { blocked: ["antigravity"] }
-      });
-      assert.ok(unrelated.includes("luna"), `luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
+      const unrelatedConfig = fakeConfig({ models: { allowed: [], blocked: [] }, providers: { blocked: ["antigravity"] } });
+      const unrelated = buildHelpModelList([claudeOf(unrelatedConfig), agyOf(unrelatedConfig), piOf(unrelatedConfig)]);
+      assert.ok(unrelated.includes("gpt-6-luna"), `gpt-6-luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
+      assert.ok(unrelated.includes("opencode-go/gpt-6-luna"), `opencode-go/gpt-6-luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
     } finally {
       setModelRegistry(undefined);
     }

@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { getAdapter, listAdapterNames, resolveAdapterForModel, resolveAdapterForModelRefreshed, providersOfModel, isModelProviderAllowed } from "../../src/adapters/registry.js";
-import { setModelRegistry } from "../../src/adapters/pi.js";
-import { setAgyModelsForTesting } from "../../src/adapters/agy.js";
-import { parseAgyModelsList } from "../../src/adapters/agy.js";
-import { fakeModelRegistry } from "../fakes.js";
+import {
+  ensureRegistry,
+  getAdapter,
+  isModelProviderAllowed,
+  listAdapterNames,
+  providersOfModel,
+  resolveAdapterForModel,
+  resolveAdapterForModelRefreshed,
+  setAdaptersForTest
+} from "../../src/adapters/registry.js";
+import type { MinionConfig } from "../../src/adapters/types.js";
+import { createClaudeAdapter } from "../../src/adapters/claude.js";
+import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../../src/adapters/agy.js";
+import { createPiAdapter, setModelRegistry } from "../../src/adapters/pi.js";
+import { fakeConfig, fakeModelRegistry } from "../fakes.js";
 
 // ownsModel routes against the captured catalogs — seed fakes for this file
 // (node:test isolates files in their own process, so no cleanup needed).
@@ -49,6 +59,24 @@ before(() => {
   setAgyModelsForTesting(AGY_CATALOG);
 });
 
+// Permissive bound config: no model/provider filters, so gated claims reduce
+// to the adapters' raw claims. (fakeConfig() itself pins a non-empty
+// models.allowed — exactly what must NOT gate this file's raw-claim fixtures.)
+const PERMISSIVE: MinionConfig = fakeConfig({ models: { allowed: [], blocked: [] } });
+const configWith = (patch: Partial<MinionConfig>): MinionConfig => ({ ...PERMISSIVE, ...patch });
+
+// The registry starts EMPTY; the claim suites below pin real adapters (bound
+// to PERMISSIVE) instead of relying on any implicit default. The detect path
+// of ensureRegistry() shells out to the environment (commandExists) and is
+// not mocked — setAdaptersForTest() is the seam: it pins exactly the state
+// detection would produce.
+const pinDefaults = () =>
+  setAdaptersForTest([
+    createClaudeAdapter(PERMISSIVE),
+    createAgyAdapter(PERMISSIVE),
+    createPiAdapter(PERMISSIVE)
+  ]);
+
 // Restores the file-seed pi registry after a test swaps in its own catalog.
 const restoreSeed = () =>
   setModelRegistry(
@@ -60,7 +88,21 @@ const restoreSeed = () =>
     ])
   );
 
+describe("empty registry (before ensure/pin)", () => {
+  it("lists no adapters and owns no model", () => {
+    assert.deepEqual(listAdapterNames(), []);
+    assert.throws(() => resolveAdapterForModel("haiku"), /Unknown model "haiku"/);
+    assert.deepEqual(providersOfModel("haiku"), []);
+  });
+
+  it("getAdapter throws for every name", () => {
+    assert.throws(() => getAdapter("claude"), /Unknown agentCli "claude"/);
+  });
+});
+
 describe("getAdapter / listAdapterNames", () => {
+  before(pinDefaults);
+
   it("returns the claude adapter by name", () => {
     assert.equal(getAdapter("claude").name, "Claude");
   });
@@ -83,6 +125,8 @@ describe("getAdapter / listAdapterNames", () => {
 });
 
 describe("resolveAdapterForModel", () => {
+  before(pinDefaults);
+
   it("resolves claude's short aliases to the claude adapter", () => {
     assert.equal(resolveAdapterForModel("haiku").name, "Claude");
     assert.equal(resolveAdapterForModel("sonnet").name, "Claude");
@@ -112,7 +156,71 @@ describe("resolveAdapterForModel", () => {
   });
 });
 
+describe("gated claim vs raw claim", () => {
+  it("a provider-blocked string keeps its providers via the raw claim but resolves as unknown via the gate", () => {
+    try {
+      // Rebind only agy with antigravity blocked: the raw claim still names
+      // the provider, the gated claim drops the string entirely.
+      setAdaptersForTest([
+        createClaudeAdapter(PERMISSIVE),
+        createAgyAdapter(configWith({ providers: { blocked: ["antigravity"] } })),
+        createPiAdapter(PERMISSIVE)
+      ]);
+      assert.deepEqual(providersOfModel("gpt-oss"), ["antigravity"]);
+      assert.throws(() => resolveAdapterForModel("gpt-oss"), /Unknown model "gpt-oss"/);
+    } finally {
+      pinDefaults();
+    }
+  });
+
+  it("rebinding the config changes gated outcomes", () => {
+    try {
+      setAdaptersForTest([
+        createClaudeAdapter(PERMISSIVE),
+        createAgyAdapter(configWith({ providers: { blocked: ["antigravity"] } })),
+        createPiAdapter(PERMISSIVE)
+      ]);
+      assert.throws(() => resolveAdapterForModel("gpt-oss"), /Unknown model/);
+      // Rebind to a permissive config: the same string resolves again.
+      pinDefaults();
+      assert.equal(resolveAdapterForModel("gpt-oss").name, "Antigravity");
+    } finally {
+      pinDefaults();
+    }
+  });
+
+  it("an unregistered adapter's strings are owned by nobody", () => {
+    try {
+      setAdaptersForTest([createClaudeAdapter(PERMISSIVE), createPiAdapter(PERMISSIVE)]);
+      assert.throws(() => resolveAdapterForModel("gemini-flash"), /Unknown model "gemini-flash"/);
+      assert.deepEqual(providersOfModel("gemini-flash"), []);
+    } finally {
+      pinDefaults();
+    }
+  });
+});
+
+describe("ensureRegistry", () => {
+  it("no-ops while the registry is test-pinned", async () => {
+    pinDefaults();
+    try {
+      await ensureRegistry(PERMISSIVE); // detection would be environment-dependent; pinned wins
+      assert.deepEqual(listAdapterNames(), ["claude", "agy", "pi"]);
+      assert.equal(resolveAdapterForModel("haiku").name, "Claude");
+    } finally {
+      pinDefaults();
+    }
+  });
+
+  // The unpinned detect path (commandExists over the blueprints) is not
+  // exercised here: it shells out to PATH and its outcome depends on the
+  // host. setAdaptersForTest() pins the state detection produces, which is
+  // what every consumer of the registry actually sees.
+});
+
 describe("resolveAdapterForModelRefreshed", () => {
+  before(pinDefaults);
+
   it("claims the model once the refresh brings its catalog up", async () => {
     setModelRegistry(undefined); // pi's catalog not captured yet (cold start)
     try {
@@ -141,6 +249,8 @@ describe("resolveAdapterForModelRefreshed", () => {
 });
 
 describe("providersOfModel / isModelProviderAllowed", () => {
+  before(pinDefaults);
+
   it("attributes claude's aliases and claude-* ids to claude", () => {
     assert.deepEqual(providersOfModel("haiku"), ["claude"]);
     assert.deepEqual(providersOfModel("claude-whatever"), ["claude"]);

@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { beforeEach, describe, it } from "node:test";
 import {
   buildArgs,
+  createAgyAdapter,
   deriveAliases,
   describeUnsupported,
   environment,
-  ownsModel,
   parseAgyModelsList,
   parseLine,
+  rawOwnsModel,
   refreshAgyModels,
   setAgyModelsForTesting
 } from "../../src/adapters/agy.js";
@@ -57,13 +58,18 @@ const AGY_CATALOG = parseAgyModelsList(AGY_MODELS_STDOUT)!;
 
 function fakeConfig(overrides: Partial<MinionConfig> = {}): MinionConfig {
   return {
-    allowedModels: ["gemini-flash", "gemini-pro", "gpt-oss"],
+    models: { allowed: ["gemini-flash", "gemini-pro", "gpt-oss"] },
     allowedTools: [],
     maxBudgetUsd: 5,
     timeoutMs: 900_000,
     ...overrides
   };
 }
+
+// Ownership/refresh assertions are about the CLI-intrinsic claim, so they
+// run on an adapter built with empty filters (no allowlist, no blocks, no
+// providers config); the config-gated cases below build their own.
+const ungated = createAgyAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }));
 
 function fakeRequest(overrides: Partial<MinionRequest> = {}): MinionRequest {
   return {
@@ -187,28 +193,79 @@ describe("resolveAlias", () => {
 
 describe("ownsModel", () => {
   it("claims exact catalog ids and derived aliases", () => {
-    assert.equal(ownsModel("gemini-3.8-flash-high"), true);
-    assert.equal(ownsModel("GEMINI-3.8-FLASH-HIGH"), true);
-    assert.equal(ownsModel("gemini-flash"), true);
-    assert.equal(ownsModel("gemini-pro"), true);
-    assert.equal(ownsModel("gpt-oss"), true);
+    assert.equal(ungated.ownsModel("gemini-3.8-flash-high"), true);
+    assert.equal(ungated.ownsModel("GEMINI-3.8-FLASH-HIGH"), true);
+    assert.equal(ungated.ownsModel("gemini-flash"), true);
+    assert.equal(ungated.ownsModel("gemini-pro"), true);
+    assert.equal(ungated.ownsModel("gpt-oss"), true);
+  });
+
+  it("gates ownsModel against the bound config without touching the raw claim", () => {
+    const adapter = createAgyAdapter(
+      fakeConfig({ models: { allowed: ["gemini-flash"], blocked: ["gemini-flash"] } })
+    );
+    assert.equal(adapter.ownsModel("gemini-flash"), false);
+    assert.equal(adapter.rawOwnsModel("gemini-flash"), true);
   });
 
   it("does not claim claude models, even though agy can also serve them", () => {
-    assert.equal(ownsModel("claude-sonnet-4-6"), false);
-    assert.equal(ownsModel("claude-opus-4-6-thinking"), false);
-    assert.equal(ownsModel("sonnet"), false);
+    assert.equal(ungated.ownsModel("claude-sonnet-4-6"), false);
+    assert.equal(ungated.ownsModel("claude-opus-4-6-thinking"), false);
+    assert.equal(ungated.ownsModel("sonnet"), false);
   });
 
   it("returns false for an unrelated model string", () => {
-    assert.equal(ownsModel("totally-unknown"), false);
-    assert.equal(ownsModel("gemini-9.9-flash-high"), false);
+    assert.equal(ungated.ownsModel("totally-unknown"), false);
+    assert.equal(ungated.ownsModel("gemini-9.9-flash-high"), false);
   });
 
   it("claims nothing with an empty catalog — a failed refresh routes to nothing", () => {
     setAgyModelsForTesting([]);
-    assert.equal(ownsModel("gemini-flash"), false);
-    assert.equal(ownsModel("gemini-3.8-flash-high"), false);
+    assert.equal(ungated.ownsModel("gemini-flash"), false);
+    assert.equal(ungated.ownsModel("gemini-3.8-flash-high"), false);
+  });
+});
+
+describe("rawOwnsModel", () => {
+  it("recognizes catalog ids and derived aliases without consulting the config", () => {
+    assert.equal(rawOwnsModel("gemini-3.8-flash-high"), true);
+    assert.equal(rawOwnsModel("gemini-flash"), true);
+    assert.equal(rawOwnsModel("gpt-oss"), true);
+    assert.equal(rawOwnsModel("totally-unknown"), false);
+  });
+});
+
+describe("availableModels (config-gated)", () => {
+  it("intersects an allowlist with the raw claim", () => {
+    const adapter = createAgyAdapter(
+      fakeConfig({ models: { allowed: ["gemini-flash", "claude-sonnet-4-6"], blocked: [] } })
+    );
+    assert.deepEqual(adapter.availableModels(), ["gemini-flash"]);
+  });
+
+  it("lists the exact catalog ids when the allowlist is empty", () => {
+    assert.deepEqual(ungated.availableModels(), [
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-low",
+      "gemini-3.7-flash-high",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-low",
+      "gemini-3.6-flash-high",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-low",
+      "gemini-3.1-pro-high",
+      "gemini-3.1-pro-low",
+      "gpt-oss-120b-medium"
+    ]);
+  });
+
+  it("is empty when the provider is config-blocked", () => {
+    const adapter = createAgyAdapter(
+      fakeConfig({ models: { allowed: [], blocked: [] }, providers: { allowed: [], blocked: ["antigravity"] } })
+    );
+    assert.deepEqual(adapter.availableModels(), []);
+    assert.equal(adapter.ownsModel("gemini-flash"), false);
   });
 });
 
@@ -466,7 +523,7 @@ describe("refreshAgyModels", () => {
     fakeAgy('{"status":"ERROR","response":"not logged in"}');
     try {
       await refreshAgyModels();
-      assert.equal(ownsModel("gpt-oss"), true);
+      assert.equal(ungated.ownsModel("gpt-oss"), true);
     } finally {
       process.env.PATH = realPath;
       setAgyModelsForTesting(AGY_CATALOG);
@@ -478,7 +535,7 @@ describe("refreshAgyModels", () => {
     fakeAgy('{"status":"SUCCESS","command":{"data":{"models":[]}}}');
     try {
       await refreshAgyModels();
-      assert.equal(ownsModel("gpt-oss"), false);
+      assert.equal(ungated.ownsModel("gpt-oss"), false);
     } finally {
       process.env.PATH = realPath;
       setAgyModelsForTesting(AGY_CATALOG);

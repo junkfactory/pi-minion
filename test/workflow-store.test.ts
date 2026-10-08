@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
 import { setModelRegistry } from "../src/adapters/pi.js";
-import { fakeModelRegistry } from "./fakes.js";
+import { createPiAdapter } from "../src/adapters/pi.js";
+import { fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
   formatWorkflowConfirm,
   formatWorkflowLabel,
@@ -38,6 +40,12 @@ const config = { maxBudgetUsd: 5 };
 // pi-adapter models these tests reference (files run in isolated test
 // processes, so no cleanup needed).
 setModelRegistry(fakeModelRegistry([{ id: "gpt-5", provider: "openai-codex" }]));
+
+// The registry starts empty now; pin a config-bound pi adapter so
+// modelEnforcesBudget's default lookup (resolveAdapterForModel) resolves
+// deterministically: gpt-5 → pi (no cost ceiling), unclaimed models →
+// catch → enforced.
+setAdaptersForTest([createPiAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }))]);
 
 function def(...steps: Array<Partial<WorkflowStepDef> & { id: string }>): WorkflowStepDef[] {
   return steps.map(

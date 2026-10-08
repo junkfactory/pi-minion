@@ -12,9 +12,11 @@ import {
   resolveTaskText,
   sumFields,
   resolveAlias,
-  deriveAliasClusters
+  deriveAliasClusters,
+  selectAvailableModels
 } from "./util.js";
 import type { AliasCluster } from "./util.js";
+import { isModelAllowed, isProviderAllowed } from "../config.js";
 
 // The live model catalog, parsed from `agy --output-format=json models`.
 // Everything below (ownership, derived aliases, help ids, --model resolution)
@@ -133,23 +135,20 @@ function resolveModelAgainstCatalog(model: string, effort: string): string {
   return resolveAlias(cluster, effort);
 }
 
-export function ownsModel(model: string): boolean {
+// Ungated, CLI-intrinsic claim: a literal catalog id or a derived alias of
+// the snapshot. Config gating (providers/models) is layered on top in
+// ownsModel.
+export function rawOwnsModel(model: string): boolean {
   const entries = cachedEntries();
   const lower = model.toLowerCase();
   if (entries.some((entry) => entry.id.toLowerCase() === lower)) return true;
   return deriveAliases(entries).some((cluster) => cluster.name === lower);
 }
 
-// help_pi_minion's universe: aliases first (they read naturally), then the
-// concrete catalog ids — reflected live from agy's models snapshot.
-export function availableIds(): string[] {
-  const entries = cachedEntries();
-  return [...deriveAliases(entries).map((cluster) => cluster.name), ...entries.map((entry) => entry.id)];
-}
-
 // Whatever the underlying model, agy serves it under Antigravity's own
-// provider identity.
-export function providersOf(): string[] {
+// provider identity. The model parameter is ignored — the routing answer
+// is the same for every model string this adapter claims.
+export function providersOf(_model: string): string[] {
   return ["antigravity"];
 }
 
@@ -338,22 +337,44 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
   ];
 }
 
-export const agyAdapter: AgentCliAdapter = {
-  name: "Antigravity",
-  command: "agy",
-  description: "Google's Antigravity CLI — routes to Gemini and GPT-OSS models",
-  installHint: "see https://antigravity.google/ for installation instructions",
-  rawOutputHint:
-    'raw stream-json, one JSON object per line; assistant text is in "step_update" events under step_update.text_delta where step_update.step_type is "agent_response".',
-  permissionDeniedWarning:
-    "one or more actions were denied during this run (agy reported denied_actions); the result below may be incomplete.",
-  capabilities,
-  ownsModel,
-  availableIds,
-  providersOf,
-  refreshCatalog: refreshAgyModels,
-  buildArgs,
-  environment,
-  parseLine,
-  describeUnsupported
-};
+export function createAgyAdapter(config: MinionConfig): AgentCliAdapter {
+  // Provider gate against the bound config: providersOf "[]" = keep
+  // (unidentifiable), otherwise every provider must pass isProviderAllowed.
+  const providerGate = (model: string) => {
+    const providers = providersOf(model);
+    return providers.length === 0 || providers.every((p) => isProviderAllowed(config, p));
+  };
+  return {
+    name: "Antigravity",
+    command: "agy",
+    description: "Google's Antigravity CLI — routes to Gemini and GPT-OSS models",
+    installHint: "see https://antigravity.google/ for installation instructions",
+    rawOutputHint:
+      'raw stream-json, one JSON object per line; assistant text is in "step_update" events under step_update.text_delta where step_update.step_type is "agent_response".',
+    permissionDeniedWarning:
+      "one or more actions were denied during this run (agy reported denied_actions); the result below may be incomplete.",
+    capabilities,
+    ownsModel(model) {
+      return rawOwnsModel(model) && providerGate(model) && isModelAllowed(config, model);
+    },
+    rawOwnsModel,
+    availableModels() {
+      // help_pi_minion's universe: allowed∩rawOwns when the allowlist is
+      // non-empty, else exact catalog ids reflected live from agy's models
+      // snapshot (claude-* ids already excluded at parse). Derived aliases
+      // stay accepted at request time (ownsModel/resolveAlias) but are not
+      // listed — the main agent should pin an exact id instead of a stem
+      // that may drift across releases.
+      const base = config.models?.allowed?.length
+        ? config.models.allowed.filter(rawOwnsModel)
+        : cachedEntries().map((entry) => entry.id);
+      return selectAvailableModels(base, config, providersOf);
+    },
+    providersOf,
+    refreshCatalog: refreshAgyModels,
+    buildArgs,
+    environment,
+    parseLine,
+    describeUnsupported
+  };
+}

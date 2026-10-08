@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { JobUI, StepRunStats } from "./agent.ui.js";
 import type { MinionConfig, MinionRequest, TokenCounts, UsageTotals } from "./adapters/types.js";
 import { resolveTaskText, truncate } from "./adapters/util.js";
-import { listAdapters, providersOfModel, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
+import { ensureRegistry, listAdapters, providersOfModel, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
 import { writeChildSession } from "./child-session.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
@@ -49,24 +49,25 @@ export async function validateRequest(
   cwd: string,
   config: MinionConfig
 ): Promise<MinionRequest> {
+  await ensureRegistry(config);
   const workspace = resolve(request.workspace);
   if (workspace !== resolve(cwd)) {
     throw new Error("workspace must be the current Pi workspace");
   }
   if (!(await stat(workspace)).isDirectory())
     throw new Error("workspace is not a directory");
-  if (!isModelAllowed(config, request.model))
-    throw new Error(
-      isModelBlocked(config, request.model)
-        ? `Model is blocked: ${request.model} (blockedModels). Call help_pi_minion for the models usable here.`
-        : `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
-    );
   const modelProviders = providersOfModel(request.model);
   if (modelProviders.length > 0 && !modelProviders.every((p) => isProviderAllowed(config, p))) {
     throw new Error(
       `Model ${request.model} is excluded by the providers config (providers: ${modelProviders.join(", ")}). Call help_pi_minion for the models usable here.`
     );
   }
+  if (!isModelAllowed(config, request.model))
+    throw new Error(
+      isModelBlocked(config, request.model)
+        ? `Model is blocked: ${request.model} (models.blocked). Call help_pi_minion for the models usable here.`
+        : `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
+    );
   if (
     request.maxBudgetUsd !== undefined &&
     (!Number.isFinite(request.maxBudgetUsd) || request.maxBudgetUsd <= 0)
@@ -124,10 +125,13 @@ export async function startJob(
   const validRequest = await validateRequest(request, cwd, config);
   // help_pi_minion awaits every adapter's catalog refresh before listing
   // models; a run must not declare a model unknown against a catalog that
-  // session_start's fire-and-forget refresh hasn't populated yet.
-  const adapter = await resolveAdapterForModelRefreshed(validRequest.model, () =>
-    Promise.all(listAdapters().map((candidate) => candidate.refreshCatalog?.()))
-  );
+  // session_start's fire-and-forget refresh hasn't populated yet. The refresh
+  // callback also re-runs ensureRegistry: a binary installed mid-session
+  // becomes routable at the next resolution attempt.
+  const adapter = await resolveAdapterForModelRefreshed(validRequest.model, async () => {
+    await ensureRegistry(config);
+    await Promise.all(listAdapters().map((candidate) => candidate.refreshCatalog?.()));
+  });
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
   const title = workflowStep?.title ?? deriveJobTitle(request.task);

@@ -29,7 +29,7 @@ describe("loadConfig", () => {
     // guaranteed-nonexistent override path here so this test stays
     // hermetic regardless of whether the real override file exists.
     const config = await loadConfig(join(tmpdir(), "pi-minion-test-no-override.json"));
-    assert.deepEqual(config.allowedModels, []);
+    assert.deepEqual(config.models, { allowed: [], blocked: [] });
     assert.equal(config.maxOutputBytes, 15_000_000);
     assert.equal(config.maxResultPreviewBytes, 50_000);
     assert.equal(config.shortcut, "alt+j");
@@ -47,22 +47,22 @@ describe("loadConfig", () => {
     }
   });
 
-  it("throws when a merged override strips a required field", async () => {
+  it("throws when a merged override gives models.allowed the wrong type", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");
     try {
-      await writeFile(overridePath, JSON.stringify({ allowedModels: "oops" }), "utf8");
+      await writeFile(overridePath, JSON.stringify({ models: { allowed: "oops" } }), "utf8");
       await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
     } finally {
       await rm(dir, { recursive: true });
     }
   });
 
-  it("throws when a merged override gives blockedModels the wrong type", async () => {
+  it("throws when a merged override gives models.blocked the wrong type", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");
     try {
-      await writeFile(overridePath, JSON.stringify({ blockedModels: "oops" }), "utf8");
+      await writeFile(overridePath, JSON.stringify({ models: { blocked: "oops" } }), "utf8");
       await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
     } finally {
       await rm(dir, { recursive: true });
@@ -180,7 +180,19 @@ describe("loadConfig", () => {
     try {
       await writeFile(overridePath, JSON.stringify({ defaultEffort: "medium" }), "utf8");
       const config = await loadConfig(overridePath);
-      assert.deepEqual(config.allowedModels, []);
+      assert.deepEqual(config.models, { allowed: [], blocked: [] });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("ignores legacy allowedModels/blockedModels keys from older override files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ allowedModels: ["sonnet"], blockedModels: ["gemini*"] }), "utf8");
+      const config = await loadConfig(overridePath);
+      assert.deepEqual(config.models, { allowed: [], blocked: [] });
     } finally {
       await rm(dir, { recursive: true });
     }
@@ -226,15 +238,15 @@ describe("loadConfig", () => {
 });
 
 describe("isModelAllowed / isModelBlocked", () => {
-  it("treats an empty blockedModels as nothing blocked", () => {
-    const config = fakeConfig({ allowedModels: ["sonnet"], blockedModels: [] });
+  it("treats an empty models.blocked as nothing blocked", () => {
+    const config = fakeConfig({ models: { allowed: ["sonnet"], blocked: [] } });
     assert.equal(isModelAllowed(config, "sonnet"), true);
     assert.equal(isModelAllowed(config, "haiku"), false);
     assert.equal(isModelBlocked(config, "haiku"), false);
   });
 
   it("blocks every id matching a trailing-'*' prefix pattern", () => {
-    const config = fakeConfig({ allowedModels: [], blockedModels: ["gemini*"] });
+    const config = fakeConfig({ models: { allowed: [], blocked: ["gemini*"] } });
     for (const model of ["gemini-flash", "gemini-pro", "gemini-3.1-pro"]) {
       assert.equal(isModelBlocked(config, model), true, `${model} not blocked`);
       assert.equal(isModelAllowed(config, model), false, `${model} not blocked`);
@@ -242,30 +254,30 @@ describe("isModelAllowed / isModelBlocked", () => {
     assert.equal(isModelAllowed(config, "sonnet"), true);
   });
 
-  it("allows every id matching a trailing-'*' prefix pattern in allowedModels", () => {
-    const config = fakeConfig({ allowedModels: ["gemini*"], blockedModels: [] });
+  it("allows every id matching a trailing-'*' prefix pattern in models.allowed", () => {
+    const config = fakeConfig({ models: { allowed: ["gemini*"], blocked: [] } });
     for (const model of ["gemini-flash", "gemini-pro", "gemini-3.1-pro"]) {
       assert.equal(isModelAllowed(config, model), true, `${model} not allowed`);
     }
     assert.equal(isModelAllowed(config, "sonnet"), false);
   });
 
-  it("lets blockedModels win over allowedModels (precedence)", () => {
-    const config = fakeConfig({ allowedModels: ["gemini-flash"], blockedModels: ["gemini*"] });
+  it("lets models.blocked win over models.allowed (precedence)", () => {
+    const config = fakeConfig({ models: { allowed: ["gemini-flash"], blocked: ["gemini*"] } });
     assert.equal(isModelBlocked(config, "gemini-flash"), true);
     assert.equal(isModelAllowed(config, "gemini-flash"), false);
   });
 
   it("matches a pattern without '*' exactly, not as a prefix", () => {
-    const config = fakeConfig({ allowedModels: [], blockedModels: ["kimi-k3"] });
+    const config = fakeConfig({ models: { allowed: [], blocked: ["kimi-k3"] } });
     assert.equal(isModelBlocked(config, "kimi-k3"), true);
     assert.equal(isModelBlocked(config, "kimi-k3-flash"), false);
     assert.equal(isModelAllowed(config, "kimi-k3-flash"), true);
   });
 
-  it("reports nothing blocked when blockedModels is absent", () => {
+  it("reports nothing blocked when models.blocked is absent", () => {
     assert.equal(isModelBlocked({}, "sonnet"), false);
-    assert.equal(isModelAllowed({ allowedModels: [], blockedModels: undefined }, "sonnet"), true);
+    assert.equal(isModelAllowed({ models: {} }, "sonnet"), true);
   });
 });
 
@@ -309,9 +321,9 @@ describe("applyConfigOverride", () => {
   });
 
   it("replaces array fields wholesale rather than concatenating", () => {
-    const base = fakeConfig({ allowedModels: ["sonnet", "opus"] });
-    const merged = applyConfigOverride(base, JSON.stringify({ allowedModels: ["haiku"] }));
-    assert.deepEqual(merged.allowedModels, ["haiku"]);
+    const base = fakeConfig({ models: { allowed: ["sonnet", "opus"] } });
+    const merged = applyConfigOverride(base, JSON.stringify({ models: { allowed: ["haiku"] } }));
+    assert.deepEqual(merged.models, { allowed: ["haiku"] });
   });
 
   it("ignores malformed JSON and falls back to base", () => {

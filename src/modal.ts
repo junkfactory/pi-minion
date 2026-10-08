@@ -92,11 +92,33 @@ export async function backfillModal(
 // entry for it, e.g. after a session replacement) may not resolve to a
 // registered adapter — best-effort fall back to whichever adapter is
 // registered first rather than fail the picker over stale/missing metadata.
+// With an empty registry (no CLI installed yet) there is no first adapter;
+// fall back to a no-op parser so backfillModal still runs and just replays
+// nothing instead of throwing over stale/missing metadata.
+const unresolvableAdapter: AgentCliAdapter = {
+  name: "none",
+  command: "none",
+  description: "no pi-minion adapter is registered",
+  installHint: "",
+  rawOutputHint: "",
+  permissionDeniedWarning: "",
+  capabilities: { supportsAllowedTools: false, supportsEffort: false, supportsMaxBudgetUsd: false },
+  rawOwnsModel: () => false,
+  ownsModel: () => false,
+  availableModels: () => [],
+  providersOf: () => [],
+  buildArgs: () => [],
+  environment: () => ({}),
+  parseLine: () => [],
+  describeUnsupported: () => []
+};
+
 export function resolveAdapterForJob(model: string): AgentCliAdapter {
   try {
     return resolveAdapterForModel(model);
   } catch {
-    return getAdapter(listAdapterNames()[0]);
+    const names = listAdapterNames();
+    return names.length > 0 ? getAdapter(names[0]) : unresolvableAdapter;
   }
 }
 

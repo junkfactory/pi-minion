@@ -2,7 +2,7 @@ import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-a
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_PRUNE_AFTER_DAYS, loadConfig, readShortcutConfigSync, resolveShortcut } from "./config.js";
 import { setShowGlyphs } from "./glyphs.js";
-import { listAdapters } from "./adapters/registry.js";
+import { ensureRegistry, listAdapters } from "./adapters/registry.js";
 import {
   bindSessionApi,
   holdPostsFor,
@@ -39,6 +39,26 @@ export function canDisposeJobUI(jobCount: number, allWorkflows: Iterable<{ finis
 // run in different factory instances.
 let replacedSessionId: string | undefined;
 
+// Captured by the startup chain below so session_start's startSession
+// dispatch can await adapter detection even if that async chain hasn't
+// landed yet. Undefined only while loadConfig() is pending or failed —
+// without a config there is nothing to detect against.
+let bootstrappedConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+
+// Registration must not depend on the startup chain's loadConfig() having
+// resolved first: on /reload, session_start can fire before it does, and
+// skipping registration (and the startSession seeding that follows it) even
+// once leaves pi's model registry unseeded for the whole session — empty
+// help list, every model "Unknown model". Fall back to loading the config
+// here; only a genuinely failed load skips registration. Exported for the
+// regression test that pins this ordering guarantee.
+export async function ensureRegistryReady(): Promise<void> {
+  const config = bootstrappedConfig ?? (await loadConfig().catch(() => undefined));
+  if (!config) return;
+  bootstrappedConfig = config;
+  await ensureRegistry(config);
+}
+
 export default function (pi: ExtensionAPI) {
   // Must happen synchronously here, not inside the async loadConfig() chain
   // below — see readShortcutConfigSync()'s comment for why an async
@@ -51,7 +71,15 @@ export default function (pi: ExtensionAPI) {
   });
 
   loadConfig()
-    .then((config) => pruneOldJobs(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS))
+    .then((config) => {
+      // Non-blocking CLI detection: registration = presence of the adapter's
+      // command on PATH, instances bound to this config. session_start's
+      // startSession dispatch awaits ensureRegistry() first, so it only ever
+      // reaches registered adapters.
+      bootstrappedConfig = config;
+      void ensureRegistry(config);
+      return pruneOldJobs(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
+    })
     .catch(() => {
       // Best-effort startup cleanup; ignore missing/invalid config.
     });
@@ -112,7 +140,14 @@ export default function (pi: ExtensionAPI) {
     if (canDisposeJobUI(jobs.size, workflows.values())) peekJobUI()?.dispose();
   });
 
-  pi.on("session_start", (event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
+    // Only registered adapters receive startSession/refreshCatalog — wait for
+    // detection first (a no-op once the startup chain already ran, or while
+    // tests have pinned the registry). Skipped only when loadConfig() failed;
+    // without a config there is nothing to detect against. Loads the config
+    // itself when the startup chain hasn't resolved yet (see
+    // ensureRegistryReady) so this event's timing can't skip seeding.
+    await ensureRegistryReady();
     const sessionId = ctx.sessionManager.getSessionId();
     // Only a replacement consumes the handoff — a subagent's own session
     // starts with "startup" and must not take over the replaced session's jobs.

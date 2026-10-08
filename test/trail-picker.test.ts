@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeAdapter } from "../src/adapters/claude.js";
+import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createJobUI } from "../src/agent.ui.js";
 import { openPiMinionsPicker } from "../src/modal.js";
 import { jobMeta } from "../src/job-store.js";
@@ -20,7 +20,14 @@ import {
   TRAIL_SENTINEL_ID
 } from "../src/trail-picker.js";
 import { workflows, type MinionWorkflow } from "../src/workflow-store.js";
-import { fakeCtx, fakeTheme, fakeTui } from "./fakes.js";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { fakeConfig, fakeCtx, fakeTheme, fakeTui } from "./fakes.js";
+
+// The registry starts empty now; pin a config-bound claude adapter so the
+// detail view's resolveAdapterForJob("sonnet") finds a parser that replays
+// stdout.json events (files run in isolated test processes, so no unpin
+// needed — the remaining reference keeps the factory exported).
+void setAdaptersForTest([createClaudeAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }))]);
 
 type BrowserComponent = {
   render: (width: number) => string[];
@@ -853,4 +860,4 @@ describe("label formatters", () => {
 
 // Reference unused exports so tsconfig doesn't drop them — they're part
 // of the v2 public surface for the trail browser tests below.
-void claudeAdapter;
+void createClaudeAdapter;

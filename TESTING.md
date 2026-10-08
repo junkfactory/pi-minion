@@ -54,8 +54,10 @@ Reference-machine baseline: **44 models**.
 2. Call `help_pi_minion`: models backed by that provider must be gone
    (shared aliases too — the every-backing-provider rule hides a string if
    *any* entry matches). On the reference machine the whole catalog is
-   `opencode-go` (30/30 ids), so the list becomes `[]` — correct, not a
-   breakage; machines with mixed providers should lose only that
+   `opencode-go` (30/30 ids), so the list becomes `[]` — the empty result
+   follows from registration (adapters whose CLI isn't on `PATH` don't get
+   registered, so nothing is owned or emitted) combined with the provider
+   filter; machines with mixed providers should lose only that
    provider's rows.
 3. Run-time gate: `run_pi_minion` with a blocked model must fail with
    `Model <model> is excluded by the providers config (providers: …).
@@ -102,3 +104,24 @@ pi -e ./src/pi-minion.ts -p "some prompt that exercises the change"
 - 2026-10-07 — refresh-retry + agy stale-keeps (`f47e`): matrix 4/4 green
   on the reload; `Unknown model` path exercised through the new awaited
   catalog refresh.
+- 2026-10-07 — `models.{allowed,blocked}` rename + exact-id help listing:
+  matrix 4/4 green; new baseline 60 (30 catalog ids + 30 `provider/id`
+  pairs, derived aliases dropped by design; claude/agy absent from PATH).
+  Provider block hid 59/60 — bare `claude-haiku-5-5` survived because
+  `providersOfModel` attributes it to the claude adapter (claim order,
+  `providersOf() → ["claude"]`) even though pi serves it from opencode-go;
+  pre-existing attribution quirk, not a regression. Undo restored 60/60.
+- 2026-10-07 — config-bound adapter factories + detect-and-register
+  registry: registration=presence; provider gate evaluated first;
+  `allowed ∩ rawOwns` membership; suite green.
+- 2026-10-07 20:37 PDT — live battery on the registry refactor caught a
+  real regression: `session_start` raced the startup chain's
+  `loadConfig()`, skipping `ensureRegistry` + `startSession` seeding —
+  session answered `models: []` and every dispatch `Unknown model`
+  (baseline, standalone-positive, workflow-positive failed; both
+  negative cells passed). Fixed via self-loading `ensureRegistryReady()`
+  - regression test; suite 490/490. Post-reload run fully green:
+  baseline 60; matrix 4/4 (`DIR=… NODE=v24.20.0`, `RECEIVED:Darwin`,
+  exact bogus rejection, `1 failed, 1 skipped`); §3 block → `models: []`
+  (claude-haiku-5-5 now correctly hidden), gate message exact, undo
+  byte-identical 60/60.

@@ -3,9 +3,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { Type, type Static } from "typebox";
 import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
-import { commandExists } from "./adapters/util.js";
-import { getAdapter, isModelProviderAllowed, listAdapterNames } from "./adapters/registry.js";
-import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, isModelAllowed, loadConfig } from "./config.js";
+import { ensureRegistry, getAdapter, listAdapterNames, listAdapters } from "./adapters/registry.js";
+import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig } from "./config.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
 import { glyph } from "./glyphs.js";
@@ -68,7 +67,7 @@ export const PI_MINION_EXAMPLES = [
   "Run a pi minion to explore this code base and summarize it",
   "Run a sonnet pi minion to debug this ticket",
   "Run an opus pi minion to review current changes at medium effort; budget $5",
-  "Use a workflow: two sonnet agents review the current changes for bugs and performance, then a luna agent verifies their findings"
+  "Use a workflow: two sonnet agents review the current changes for bugs and performance, then a gpt-6-luna agent verifies their findings"
 ];
 
 // Agent-facing (not human-facing): what the caller itself needs to know
@@ -78,6 +77,7 @@ export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result.",
   "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd.",
   "model must be one of `models` above — already filtered to what's installed on this machine.",
+  "If the user names a model vaguely or ambiguously (a brand like \"gemini\", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don't guess.",
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
   "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
   "schedule_pi_minion_workflow takes run_pi_minion_workflow's fields plus a cron expression; the user approves once when it is scheduled, then each tick starts a fresh run (skipped while the previous run is still going) whose summary posts quietly. It needs exactly one final step (one no other step depends on); only that step may end the schedule by finishing its reply with the stop marker; stop it with cancel_pi_minion_schedule (a run in progress is cancelled separately with cancel_pi_minion_workflow and the schedule's lastWorkflowId)."
@@ -161,6 +161,7 @@ async function validateWorkflowSteps(
   cwd: string,
   config: Awaited<ReturnType<typeof loadConfig>>
 ): Promise<void> {
+  await ensureRegistry(config);
   validateWorkflowGraph(request.steps);
   for (const step of request.steps) {
     try {
@@ -261,35 +262,17 @@ async function confirmWorkflowRequest(
   return { id, config, deps: workflowStepDeps(safeNotify(ctx), () => peekJobUI() ?? getJobUI(ctx)) };
 }
 
-// Pulled out of help_pi_minion's execute() so the filtering logic is
-// testable without mocking commandExists' subprocess call — execute()
-// resolves each candidate's presence via I/O, this just decides what to keep.
-// A model whose adapter binary isn't on PATH is dropped — recommending a model
-// that would currently fail to spawn isn't useful. Adapters stay internal: the
-// agent only ever sees model names.
-// Empty allowedModels means "allow all": the universe is the union of
-// availableIds() over present adapters — each adapter self-declares the model
-// strings it offers (aliases + the live catalog the pi adapter reads from its
-// model registry). Filtering through ownsModel catches models that aren't
-// routable by anyone present and stray versions nobody claims. The same
-// isModelAllowed gate as validateRequest drops blockedModels (and, when
-// allowedModels is non-empty, anything unlisted) so help never recommends a
-// model a run would reject. The providers filter is applied in both places
-// (this list and validateRequest) so the two stay in sync, like the model gates.
-export function buildHelpModelList(
-  candidates: Array<{ adapter: AgentCliAdapter; present: boolean }>,
-  config: Pick<MinionConfig, "allowedModels" | "blockedModels" | "providers">
-): string[] {
-  const present = candidates.filter((candidate) => candidate.present);
-  const universe = config.allowedModels.length
-    ? config.allowedModels
-    : [...new Set(present.flatMap(({ adapter }) => adapter.availableIds?.() ?? []))];
-  return universe.filter(
-    (model) =>
-      isModelAllowed(config, model) &&
-      isModelProviderAllowed(config, model) &&
-      present.some(({ adapter }) => adapter.ownsModel(model))
-  );
+// Shared by help_pi_minion's execute(): what the agent may pick from today.
+// Adapters are config-bound — each availableModels() already applies its own
+// provider and isModelAllowed gates (the same ones validateRequest enforces)
+// against the config the adapter was built with, and an adapter whose binary
+// isn't installed never enters the registry in the first place. An empty
+// models.allowed means "allow all", so the union is each adapter's full
+// self-declared offer (claude's alias names, agy's exact catalog ids, the pi
+// adapter's exact ids and provider/id pairs from its model registry). This
+// just dedups across adapters; everything else lives in the adapters.
+export function buildHelpModelList(adapters: AgentCliAdapter[]): string[] {
+  return [...new Set(adapters.flatMap((adapter) => adapter.availableModels()))];
 }
 
 function textResult<T>(text: string, details: T) {
@@ -714,18 +697,13 @@ export function registerTools(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     async execute() {
       const config = await loadConfig();
+      await ensureRegistry(config);
       // Opportunistic live-catalog refresh over every registered adapter —
       // whatever subprocess or registry lookup enumerates models, it happens
       // inside the adapter. A failed refresh keeps the previous snapshot.
       await Promise.all(listAdapterNames().map((id) => getAdapter(id).refreshCatalog?.()));
-      const candidates = await Promise.all(
-        listAdapterNames().map(async (id) => {
-          const adapter = getAdapter(id);
-          return { adapter, present: await commandExists(adapter.command) };
-        })
-      );
       const payload = {
-        models: buildHelpModelList(candidates, config),
+        models: buildHelpModelList(listAdapters()),
         examples: PI_MINION_EXAMPLES,
         usageNotes: PI_MINION_USAGE_NOTES
       };
