@@ -45,10 +45,22 @@ export async function warnActiveSchedules(
     })
     .join("\n");
 
-  return ctx.ui.confirm(
+  // After Ctrl+D (EOF) stdin is closed, so the TUI can't render the
+  // confirm dialog or read a response — the promise hangs forever. Race
+  // against a timeout: if the user doesn't answer in time, proceed with
+  // cancellation (schedules will be lost, but at least pi exits cleanly).
+  const PROMPT_TIMEOUT_MS = 8_000;
+  const prompt = ctx.ui.confirm(
     "Active pi-minion schedules",
     `Quitting will cancel ${ids.length} schedule${ids.length > 1 ? "s" : ""}:\n${lines}\n\nContinue?`
   );
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<true>((resolve) => {
+    timer = setTimeout(() => resolve(true), PROMPT_TIMEOUT_MS);
+  });
+  const result = await Promise.race([prompt, timeout]);
+  clearTimeout(timer!);
+  return result;
 }
 
 // The shared JobUI is only torn down once nothing still draws on it: no job,
