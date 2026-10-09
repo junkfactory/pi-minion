@@ -1,4 +1,4 @@
-import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_PRUNE_AFTER_DAYS, loadConfig, readShortcutConfigSync, resolveShortcut } from "./config.js";
 import { setShowGlyphs } from "./glyphs.js";
@@ -27,41 +27,6 @@ import { cancelWorkflow, defaultWorkflowDeps } from "./workflow-runner.js";
 import { rehomeWorkflows, workflowIdsOwnedBySession, workflows } from "./workflow-store.js";
 
 const MAX_COLLAPSED_ENTRY_LINES = 12;
-
-// Prompts the user when the quitting session owns active schedules.
-// Returns true if it's safe to proceed (no schedules, or user confirmed).
-// Returns false if the user wants to abort.
-export async function warnActiveSchedules(
-  sessionId: string,
-  ctx: ExtensionContext
-): Promise<boolean> {
-  const ids = scheduleIdsOwnedBySession(schedules, sessionId);
-  if (ids.length === 0) return true;
-
-  const lines = ids
-    .map((id) => {
-      const s = schedules.get(id)!;
-      return `• ${s.title} (${s.cron})`;
-    })
-    .join("\n");
-
-  // After Ctrl+D (EOF) stdin is closed, so the TUI can't render the
-  // confirm dialog or read a response — the promise hangs forever. Race
-  // against a timeout: if the user doesn't answer in time, proceed with
-  // cancellation (schedules will be lost, but at least pi exits cleanly).
-  const PROMPT_TIMEOUT_MS = 8_000;
-  const prompt = ctx.ui.confirm(
-    "Active pi-minion schedules",
-    `Quitting will cancel ${ids.length} schedule${ids.length > 1 ? "s" : ""}:\n${lines}\n\nContinue?`
-  );
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<true>((resolve) => {
-    timer = setTimeout(() => resolve(true), PROMPT_TIMEOUT_MS);
-  });
-  const result = await Promise.race([prompt, timeout]);
-  clearTimeout(timer!);
-  return result;
-}
 
 // The shared JobUI is only torn down once nothing still draws on it: no job,
 // and no workflow between steps (it has no job then, but starts the next one).
@@ -163,10 +128,6 @@ export default function (pi: ExtensionAPI) {
       holdPostsFor(sessionId);
       return;
     }
-    // On quit, warn about active schedules. If the user aborts, skip
-    // cleanup to block the quit (the handler never resolves, so pi's
-    // runtime never reaches session.dispose()).
-    if (!(await warnActiveSchedules(sessionId, ctx))) return;
     // Workflows first (pending steps cancelled, then running ones stopped),
     // so none can start another step; then schedules, so none can tick and
     // start a job after its jobs are reaped.
