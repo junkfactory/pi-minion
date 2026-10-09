@@ -33,6 +33,14 @@ case "$last" in
      exit 0 ;;
   *MODE:empty*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exit 0 ;;
   *MODE:slow*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exec sleep 30 ;;
+  *MODE:long*)
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     printf '%s\n' '{"type":"result","result":"head line\\nline2\\nline3","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
+     exit 0 ;;
+  *MODE:late*)
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     printf '%s\n' '{"type":"result","result":"first\\nsecond\\nthird","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
+     exit 4 ;;
   *) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
      echo '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}}}'
      echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"working"}}}'
@@ -71,13 +79,14 @@ let sessionCounter = 0;
 function newSession() {
   const sessionId = `start-test-${++sessionCounter}`;
   const posts: Post[] = [];
+  const entries: string[] = [];
   const pi = {
-    appendEntry: () => {},
+    appendEntry: (_type: string, entry: { content: string }) => entries.push(entry.content),
     sendMessage: (msg: { content: string }, opts: { triggerTurn: boolean }) =>
       posts.push({ content: msg.content, triggerTurn: opts.triggerTurn })
   } as unknown as ExtensionAPI;
   bindSessionApi(sessionId, pi);
-  return { sessionId, posts };
+  return { sessionId, posts, entries };
 }
 
 const noop = () => {};
@@ -187,6 +196,85 @@ describe("startJob", () => {
     assert.equal(jobMeta.get(id)?.reportPath, join(JOB_ROOT, id, "result.md"));
     assert.equal(notes.length, 1);
     assert.match(notes[0], /started/);
+  });
+
+  it("caps the model-facing post while the display entry keeps the full preview", async () => {
+    const overrideDir = join(home, ".pi", "agent", "extensions");
+    mkdirSync(overrideDir, { recursive: true });
+    const override = join(overrideDir, "pi-minion.json");
+    writeFileSync(override, JSON.stringify({ maxResultContextBytes: 10 }));
+    try {
+      const { sessionId, posts, entries } = newSession();
+      const id = await startJob(request("long"), workspace, sessionId, undefined, noop, fakeUI);
+      await waitFor(() => posts.length > 0);
+      // Context: head-only + pointer notices + read instruction.
+      assert.match(posts[0].content, /Showing lines 1-1 of 3/);
+      assert.match(posts[0].content, /see the report linked above and any files it references/);
+      assert.doesNotMatch(posts[0].content, /line3/);
+      // Display entry: full result, no read hint, never truncated at 50KB.
+      assert.match(entries[0], /line3/);
+      assert.doesNotMatch(entries[0], /see the report linked above and any files it references/);
+      assert.equal(readFileSync(join(JOB_ROOT, id, "result.md"), "utf8"), "head line\nline2\nline3");
+    } finally {
+      rmSync(override, { force: true });
+    }
+  });
+
+  it("zero context cap suppresses the read hint behind the pointer-only body", async () => {
+    const overrideDir = join(home, ".pi", "agent", "extensions");
+    mkdirSync(overrideDir, { recursive: true });
+    const override = join(overrideDir, "pi-minion.json");
+    writeFileSync(override, JSON.stringify({ maxResultContextBytes: 0 }));
+    try {
+      const { sessionId, posts, entries } = newSession();
+      const id = await startJob(request("long"), workspace, sessionId, undefined, noop, fakeUI);
+      await waitFor(() => posts.length > 0);
+      assert.match(posts[0].content, /\[Omitted: 0-byte context limit\. Full result at/);
+      // The pointer notice's own "read it only when necessary" must be the only
+      // one: a second occurrence means the read hint was appended on top of it.
+      assert.equal(posts[0].content.split("read it only when necessary").length - 1, 1);
+      assert.doesNotMatch(posts[0].content, /see the report linked above and any files it references/);
+      // Display entry still holds the untruncated preview.
+      assert.match(entries[0], /line3/);
+      assert.equal(readFileSync(join(JOB_ROOT, id, "result.md"), "utf8"), "head line\nline2\nline3");
+    } finally {
+      rmSync(override, { force: true });
+    }
+  });
+
+  it("scheduled run: a returned note flips triggerTurn and lands after the read hint", async () => {
+    const { sessionId, posts, entries } = newSession();
+    await startJob(
+      request("ok"), workspace, sessionId, undefined, noop, fakeUI,
+      (finalResult) => (finalResult?.includes("FINAL ANSWER") ? "watch ended" : undefined)
+    );
+    await waitFor(() => posts.length > 0);
+    assert.equal(posts[0].triggerTurn, true);
+    assert.match(posts[0].content, /\*\*Schedule stopped:\*\* watch ended/);
+    const hintAt = posts[0].content.indexOf("see the report linked above and any files it references");
+    const noteAt = posts[0].content.indexOf("**Schedule stopped:** watch ended");
+    assert.ok(hintAt >= 0, "model post carries the read hint");
+    assert.ok(noteAt > hintAt, "schedule note follows the read hint");
+    assert.doesNotMatch(entries[0], /see the report linked above and any files it references/);
+  });
+
+  it("a result captured before a non-zero exit is inlined with the read hint", async () => {
+    const { sessionId, posts } = newSession();
+    const id = await startJob(request("late"), workspace, sessionId, undefined, noop, fakeUI);
+    await waitFor(() => posts.length > 0);
+    assert.match(posts[0].content, /Pi minion failed \(exit 4\)/);
+    assert.match(posts[0].content, /\*\*Note:\*\* a result was captured before the failure/);
+    assert.match(posts[0].content, /first/);
+    assert.match(posts[0].content, /see the report linked above and any files it references/);
+    assert.equal(readFileSync(join(JOB_ROOT, id, "result.md"), "utf8"), "first\nsecond\nthird");
+  });
+
+  it("short result: the display entry omits the read hint while the model post carries it", async () => {
+    const { sessionId, posts, entries } = newSession();
+    await startJob(request("ok"), workspace, sessionId, undefined, noop, fakeUI);
+    await waitFor(() => posts.length > 0);
+    assert.doesNotMatch(entries[0], /see the report linked above and any files it references/);
+    assert.match(posts[0].content, /see the report linked above and any files it references/);
   });
 
   it("preExec wraps the spawned binary (env -u reaches the child)", async () => {

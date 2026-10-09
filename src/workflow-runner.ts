@@ -26,6 +26,11 @@ import {
   type WorkflowStep
 } from "./workflow-store.js";
 
+// Workflow steps hand their result to downstream steps ({{steps.<id>.result}},
+// appended by renderStepTask), so the shared concise-summary instruction must
+// not apply to them: each step task carries this to demand its full output.
+export const STEP_RESULT_INSTRUCTION = `\n\nYour final reply is consumed verbatim by later workflow steps. Return your complete output verbatim in your final reply; do not summarize.`;
+
 export type StepOutcome = {
   finalResult?: string;
   reportPath?: string;
@@ -175,6 +180,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
   const request: MinionRequest = {
     task:
       renderStepTask(step.task, wf.steps, wf.maxResultPreviewBytes, step.dependsOn) +
+      STEP_RESULT_INSTRUCTION +
       (wf.scheduled && terminalStepIds(wf.steps).has(step.id) ? STOP_SCHEDULE_INSTRUCTION : ""),
     workspace: wf.cwd,
     model: step.model,

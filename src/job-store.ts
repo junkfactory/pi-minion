@@ -34,7 +34,7 @@ const sessionAliases = new Map<string, string>();
 // bound yet (between a non-quit session_shutdown and the next session_start).
 // Only sessions in `replacing` hold posts, so one that really ended still
 // drops them instead of queueing forever. Flushed on bind.
-type PendingPost = { content: string; details: Record<string, unknown>; triggerTurn: boolean };
+type PendingPost = { content: string; displayContent?: string; details: Record<string, unknown>; triggerTurn: boolean };
 const pendingPosts = new Map<string, PendingPost[]>();
 const replacing = new Set<string>();
 
@@ -49,7 +49,7 @@ export function bindSessionApi(sessionId: string, pi: ExtensionAPI): void {
   replacing.delete(sessionId);
   const pending = pendingPosts.get(sessionId);
   pendingPosts.delete(sessionId);
-  for (const post of pending ?? []) postToSession(sessionId, post.content, post.details, post.triggerTurn);
+  for (const post of pending ?? []) postToSession(sessionId, post.content, post.details, post.triggerTurn, post.displayContent);
 }
 
 // Called on a non-quit session_shutdown: its replacement binds shortly.
@@ -89,16 +89,18 @@ export function postToSession(
   sessionId: string,
   content: string,
   details: Record<string, unknown>,
-  triggerTurn: boolean
+  triggerTurn: boolean,
+  displayContent: string = content
 ): void {
   const id = resolveSessionId(sessionId);
   const pi = sessionApi(id);
   if (!pi) {
-    if (replacing.has(id)) pendingPosts.set(id, [...(pendingPosts.get(id) ?? []), { content, details, triggerTurn }]);
+    if (replacing.has(id))
+      pendingPosts.set(id, [...(pendingPosts.get(id) ?? []), { content, displayContent, details, triggerTurn }]);
     return;
   }
   try {
-    pi.appendEntry(DISPLAY_ENTRY_TYPE, { content, indent: true } satisfies PiMinionDisplayEntry);
+    pi.appendEntry(DISPLAY_ENTRY_TYPE, { content: displayContent, indent: true } satisfies PiMinionDisplayEntry);
     pi.sendMessage(
       { customType: RESULT_MESSAGE_TYPE, content, display: false, details },
       { triggerTurn, deliverAs: "followUp" }

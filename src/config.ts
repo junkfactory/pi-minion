@@ -23,6 +23,11 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 15_000_000;
 // otherwise burn the primary agent's context for free; past this cap it's
 // truncated with a pointer to the full text on disk instead.
 export const DEFAULT_MAX_RESULT_PREVIEW_BYTES = 50_000;
+// Caps the model-facing completion message's result body: the display
+// entry (excluded from model context) keeps the full
+// maxResultPreviewBytes preview, so this only bounds what the main
+// agent's model re-sends every turn until compaction. 0 = pointer-only.
+export const DEFAULT_MAX_RESULT_CONTEXT_BYTES = 4_000;
 // alt+j: unbound in Pi's default keybindings.json (docs/keybindings.md) —
 // unlike most letters, neither its ctrl+ nor alt+ form collides with an
 // editor, session, model, or tree-navigation action.

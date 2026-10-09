@@ -291,6 +291,7 @@ export function registerTools(pi: ExtensionAPI): void {
       "Use run_pi_minion when the user asks pi-minion to independently handle a task.",
       MODEL_EFFORT_GUIDELINE,
       "Track a run_pi_minion job only with list_pi_minions and cancel_pi_minion; its result posts here automatically when it finishes — don't poll.",
+      "A finished job posts a concise summary with a pointer to its full result file — read the report only when the summary isn't enough.",
       "run_pi_minion jobs are stateless and share nothing with each other: a new call has no access to a prior job's result, reasoning, or the files it touched. The required `context` field exists for exactly this — fill it with the relevant findings/decisions from any prior run this task builds on, every time, not just on a retry.",
       "Before writing `context` for a task that follows up on a prior pi-minion job, call list_pi_minions to find that job's reportPath and read the actual result file — don't reconstruct findings from memory or a possibly-compacted transcript."
     ],

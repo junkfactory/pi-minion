@@ -9,6 +9,7 @@ import { ensureRegistry, listAdapters, providersOfModel, resolveAdapterForModelR
 import { writeChildSession } from "./child-session.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_MAX_RESULT_CONTEXT_BYTES,
   DEFAULT_MAX_RESULT_PREVIEW_BYTES,
   DEFAULT_PRUNE_AFTER_DAYS,
   isModelAllowed,
@@ -354,7 +355,8 @@ export async function startJob(
   const postResult = (
     content: string,
     details: Record<string, unknown>,
-    triggerTurn = true
+    triggerTurn = true,
+    displayContent?: string
   ) => {
     // A workflow step posts nothing at its end: the workflow's one summary
     // carries each step's status, usage, cost and report. Registry cleanup
@@ -363,7 +365,7 @@ export async function startJob(
     // Owner looked up now, not at start: the session may have been replaced
     // (rehomed) or quit since.
     if (!onSettled)
-      postToSession(jobMeta.get(id)?.sessionId ?? sessionId, content, details, triggerTurn);
+      postToSession(jobMeta.get(id)?.sessionId ?? sessionId, content, details, triggerTurn, displayContent);
     jobs.delete(id);
   };
 
@@ -385,16 +387,22 @@ export async function startJob(
       output.flush();
       clearJobViews(jobUI, id);
       outputError = await output.close();
+      let resultForDisplay = finalResult;
       let resultForContext = finalResult;
       if (finalResult) {
         const resultPath = join(jobDir, "result.md");
         try {
           await writeFile(resultPath, finalResult, "utf8");
           reportPath = resultPath;
-          resultForContext = truncateResultForContext(
+          resultForDisplay = truncateResultForContext(
             finalResult,
             resultPath,
             config.maxResultPreviewBytes ?? DEFAULT_MAX_RESULT_PREVIEW_BYTES
+          );
+          resultForContext = truncateResultForContext(
+            finalResult,
+            resultPath,
+            config.maxResultContextBytes ?? DEFAULT_MAX_RESULT_CONTEXT_BYTES
           );
         } catch {
           // Best-effort: if the full result can't be written to disk, fall
@@ -419,19 +427,22 @@ export async function startJob(
         priorStatus === "cancelled" ? "cancelled" : clean ? "done" : "errored",
         { reportPath }
       );
-      const result = outputError
-        ? `Pi minion output capture failed: ${outputError.message}`
-        : describeJobResult({
-            code,
-            signal,
-            timedOut,
-            exceededOutputLimit: output.exceededOutputLimit,
-            finalResult: resultForContext,
-            stderrTail: output.stderrTail,
-            stdoutPath: output.stdoutPath,
-            rawOutputHint: adapter.rawOutputHint,
-            modelError: runError
-          });
+      const buildResult = (preview: string | undefined): string =>
+        outputError
+          ? `Pi minion output capture failed: ${outputError.message}`
+          : describeJobResult({
+              code,
+              signal,
+              timedOut,
+              exceededOutputLimit: output.exceededOutputLimit,
+              finalResult: preview,
+              stderrTail: output.stderrTail,
+              stdoutPath: output.stdoutPath,
+              rawOutputHint: adapter.rawOutputHint,
+              modelError: runError
+            });
+      const result = buildResult(resultForDisplay);
+      const contextResult = resultForContext === resultForDisplay ? result : buildResult(resultForContext);
       if (!clean) failureReason = result;
       try {
         // Best-effort, like result.md: a failed session write mustn't lose the result.
@@ -460,8 +471,11 @@ export async function startJob(
         const note = onFinalResult?.(finalResult);
         if (note) finalNote = `\n\n**Schedule stopped:** ${note}`;
       } catch {}
+      const header = `${frontmatter(reportPath)}${denialWarning}${capabilityWarning}${modelListNote}`;
+      const zeroCap = (config.maxResultContextBytes ?? DEFAULT_MAX_RESULT_CONTEXT_BYTES) <= 0;
+      const readHint = reportPath && !zeroCap ? "\n\nIf you need more detail, see the report linked above and any files it references." : "";
       postResult(
-        `${frontmatter(reportPath)}${denialWarning}${capabilityWarning}${modelListNote}\n\n${result}${finalNote}\n\n---`,
+        `${header}\n\n${contextResult}${readHint}${finalNote}\n\n---`,
         {
           id,
           code,
@@ -470,7 +484,8 @@ export async function startJob(
           permissionDenied: sawPermissionDenial,
           ...usageFields(finalUsage)
         },
-        !onFinalResult || finalNote !== ""
+        !onFinalResult || finalNote !== "",
+        `${header}\n\n${result}${finalNote}\n\n---`
       );
     } finally {
       settle({ finalResult, reportPath, ok: clean, errorReason: failureReason });

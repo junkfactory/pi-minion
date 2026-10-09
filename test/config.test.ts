@@ -32,6 +32,7 @@ describe("loadConfig", () => {
     assert.deepEqual(config.models, { allowed: [], blocked: [] });
     assert.equal(config.maxOutputBytes, 15_000_000);
     assert.equal(config.maxResultPreviewBytes, 50_000);
+    assert.equal(config.maxResultContextBytes, 4_000);
     assert.equal(config.shortcut, "alt+j");
   });
 

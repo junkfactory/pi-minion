@@ -38,14 +38,15 @@ concrete ids; adapters whose CLI is absent from `PATH` contribute nothing
 (no claude aliases and no agy entries on a machine without those binaries).
 Reference-machine baseline: **44 models**.
 
-### 2. Four-cell matrix
+### 2. Five-cell matrix
 
-| Cell                | Call                                                                                                                                                                                | Expected                                                                                                                                        |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| standalone positive | `run_pi_minion` — `model: "deepseek-v4-flash"`, `effort: "low"`, `maxBudgetUsd: 0.5`, task: run `pwd` and `node --version`, reply exactly `DIR=<pwd> NODE=<version>`                | Posted result contains that single `DIR=… NODE=…` line, frontmatter with model, token usage, `cost_usd`, and a `result.md` link                 |
-| standalone negative | `run_pi_minion` — `model: "bogus-model"`, trivial task                                                                                                                              | Immediate `Unknown model "bogus-model". Call help_pi_minion for the models usable here.` — no job id, nothing posted later                      |
-| workflow positive   | Two-step workflow: `uname` runs `uname -s` (`deepseek-v4-flash`); `ack` (`opencode-go/luna`, `dependsOn: ["uname"]`) embeds `{{steps.uname.result}}` and replies `RECEIVED:<value>` | Summary "2 done"; reading the two `reportPath`s shows `Darwin` (or host value) then `RECEIVED:<that value>`; summary lists two different models |
-| workflow negative   | Workflow: step `bad` with `model: "bogus-model"`; step `after` with `dependsOn: ["bad"]`                                                                                            | Summary "1 failed, 1 skipped"; `bad` carries the inline `Unknown model…` reason; `after` is `skipped`                                           |
+| Cell                | Call                                                                                                                                                                                | Expected                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| standalone positive | `run_pi_minion` — `model: "deepseek-v4-flash"`, `effort: "low"`, `maxBudgetUsd: 0.5`, task: run `pwd` and `node --version`, reply exactly `DIR=<pwd> NODE=<version>`                | Posted result contains that single `DIR=… NODE=…` line, frontmatter with model, token usage, `cost_usd`, and a `result.md` link                                                                                                                                                                                                                                                                                                                                                                                  |
+| standalone negative | `run_pi_minion` — `model: "bogus-model"`, trivial task                                                                                                                              | Immediate `Unknown model "bogus-model". Call help_pi_minion for the models usable here.` — no job id, nothing posted later                                                                                                                                                                                                                                                                                                                                                                                       |
+| standalone cap      | `run_pi_minion` — cheap model, `effort: "low"`, `maxBudgetUsd: 0.5`, task: reply with EXACTLY 120 distinct numbered filler lines (guarantees >4KB but <50KB)                        | The model-facing post carries `[Showing lines 1-N of 120 (4.0KB limit). Use offset=N+1 to continue.]`, the closing `[Truncated: … Full result at …/result.md …]` notice, and the hint "If you need more detail, see the report linked above and any files it references."; the LAST filler line is absent from the post. Then read `result.md` from the named offset — all 120 lines are on disk (proves pointer escape hatch + display/model split + explicit-format tasks override the concise-summary prompt) |
+| workflow positive   | Two-step workflow: `uname` runs `uname -s` (`deepseek-v4-flash`); `ack` (`opencode-go/luna`, `dependsOn: ["uname"]`) embeds `{{steps.uname.result}}` and replies `RECEIVED:<value>` | Summary "2 done"; reading the two `reportPath`s shows `Darwin` (or host value) then `RECEIVED:<that value>`; summary lists two different models                                                                                                                                                                                                                                                                                                                                                                  |
+| workflow negative   | Workflow: step `bad` with `model: "bogus-model"`; step `after` with `dependsOn: ["bad"]`                                                                                            | Summary "1 failed, 1 skipped"; `bad` carries the inline `Unknown model…` reason; `after` is `skipped`                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### 3. Provider filter (run when the `providers` config changed)
 
@@ -89,8 +90,8 @@ pi -e ./src/pi-minion.ts -p "some prompt that exercises the change"
 
 ## Pass criteria
 
-- Unit suite green on the same tree (468 tests at the last run).
-- All four matrix cells match their expected outcomes; step contents read
+- Unit suite green on the same tree (502 tests at the last run).
+- All five matrix cells match their expected outcomes; step contents read
   from `reportPath`, not just the summary statuses.
 - Baseline list restored after the config undo.
 - TUI/UI changes: the interactive smoke and checklist pass on a real
@@ -125,3 +126,21 @@ pi -e ./src/pi-minion.ts -p "some prompt that exercises the change"
   exact bogus rejection, `1 failed, 1 skipped`); §3 block → `models: []`
   (claude-haiku-5-5 now correctly hidden), gate message exact, undo
   byte-identical 60/60.
+- 2026-10-09 — live battery on the model-facing context split
+  (`maxResultContextBytes` 4KB cap + display/model content separation +
+  S1 summary prompt + step verbatim instruction): unit suite 502/502,
+  tsc clean. Matrix 4/4 green: standalone positive posted `DIR=… NODE=v24.20.0`
+  with the reworded hint "If you need more detail, see the report linked
+  above and any files it references."; standalone negative rejected
+  `bogus-model` with the exact gate message, no job id; workflow positive
+  2 done, reportPaths showed `Darwin` then `RECEIVED:Darwin` (step-result
+  channel intact under STEP_RESULT_INSTRUCTION); workflow negative
+  `1 failed, 1 skipped`. Baseline list 60/60. Pre-reload observation: a job
+  posted before `/reload` still carried the old hint literal — expected,
+  extension modules load at session start.
+- 2026-10-09 — new fifth matrix cell (standalone cap) validated live:
+  120-line (~10.8KB) filler result posted as `[Showing lines 1-43 of 120
+  (4.0KB limit)...]` + truncated notice + reworded hint; last line absent
+  from the post; reading `result.md` from offset=44 returned all remaining
+  lines through `CAPCHECK 120` (escape hatch proven against real CLIs;
+  explicit-format task correctly overrode the concise-summary prompt).

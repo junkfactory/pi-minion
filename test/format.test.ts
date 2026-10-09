@@ -114,6 +114,13 @@ describe("truncateResultForContext", () => {
     assert.match(message, /^\[Showing lines 1-1 of 1 /);
     assert.ok(message.includes("a".repeat(200)));
   });
+
+  it("returns pointer-only text when maxBytes is 0", () => {
+    const message = truncateResultForContext("line1\nline2", "/tmp/result.md", 0);
+    assert.ok(!message.includes("line1"));
+    assert.match(message, /Full result at \/tmp\/result\.md/);
+    assert.match(message, /read it only when necessary/);
+  });
 });
 
 describe("deriveJobTitle", () => {

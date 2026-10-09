@@ -34,6 +34,10 @@ export type MinionConfig = {
   pruneAfterDays?: number;
   maxOutputBytes?: number;
   maxResultPreviewBytes?: number;
+  // Caps the result body of the model-facing completion message (the
+  // display entry keeps maxResultPreviewBytes and never reaches the
+  // model). 0 posts a pointer to result.md with no body.
+  maxResultContextBytes?: number;
   shortcut?: string;
   showGlyphs?: boolean;
   adapterArgs?: Record<string, AdapterArgs>;

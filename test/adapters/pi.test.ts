@@ -207,6 +207,13 @@ describe("buildArgs", () => {
     assert.match(flagValue(args, "--append-system-prompt") ?? "", /no later turn to report back in/);
   });
 
+  it("carries the concise-summary standing instruction in the appended system prompt", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig());
+    const systemPrompt = flagValue(args, "--append-system-prompt") ?? "";
+    assert.match(systemPrompt, /context-constrained orchestrator/);
+    assert.match(systemPrompt, /concise summary — outcome, key findings or files changed, blockers/);
+  });
+
   it("puts the task last, after -- so a leading dash isn't parsed as a flag", () => {
     const args = buildArgs(fakeRequest({ task: "-x do it", context: "some evidence" }), fakeConfig());
     assert.equal(args[args.length - 2], "--");

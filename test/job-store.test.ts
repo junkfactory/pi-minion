@@ -164,6 +164,19 @@ describe("postToSession", () => {
     assert.equal((calls[1][1] as any).content, "hello");
   });
 
+  it("splits the display entry's content from the model-facing message", () => {
+    const calls: unknown[][] = [];
+    bindSessionApi("ps-split", {
+      appendEntry: (...args: unknown[]) => calls.push(["entry", ...args]),
+      sendMessage: (...args: unknown[]) => calls.push(["message", ...args])
+    } as any);
+    postToSession("ps-split", "context body", { id: "y" }, false, "display body");
+    const entry = calls.find((c) => c[0] === "entry")!;
+    const message = calls.find((c) => c[0] === "message")!;
+    assert.equal((entry[2] as any).content, "display body");
+    assert.equal((message[1] as any).content, "context body");
+  });
+
   it("is a no-op without a handle and swallows a stale handle's throw", () => {
     postToSession("no-such-session", "x", {}, true);
     bindSessionApi("ps2", {
@@ -219,6 +232,22 @@ describe("posts during a session replacement", () => {
     const second = recorder();
     bindSessionApi("reload-1", second.pi);
     assert.deepEqual(second.sent, [{ content: "during reload", triggerTurn: true }]);
+  });
+
+  it("carries a distinct display content through a held post", () => {
+    const held = { pi: { appendEntry: () => {}, sendMessage: () => {} } as any };
+    bindSessionApi("hold-d", held.pi);
+    releaseSessionApi("hold-d", held.pi);
+    holdPostsFor("hold-d");
+    postToSession("hold-d", "ctx", {}, true, "disp");
+    const received: string[] = [];
+    const sent: string[] = [];
+    bindSessionApi("hold-d", {
+      appendEntry: (_t: any, entry: any) => received.push(entry.content),
+      sendMessage: (msg: any) => sent.push(msg.content)
+    } as any);
+    assert.deepEqual(received, ["disp"]);
+    assert.deepEqual(sent, ["ctx"]);
   });
 
   it("drops a post for a session that ended rather than queueing it forever", () => {

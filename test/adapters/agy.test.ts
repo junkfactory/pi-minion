@@ -326,6 +326,13 @@ describe("buildArgs", () => {
     assert.ok(task.endsWith("Explore the repo\n\nContext:\nsome evidence"));
   });
 
+  it("carries the concise-summary standing instruction in the prefixed task text", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig());
+    const task = args[0] ?? "";
+    assert.match(task, /context-constrained orchestrator/);
+    assert.match(task, /concise summary — outcome, key findings or files changed, blockers/);
+  });
+
   it("tells the minion not to background work and report back later", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     assert.match(args[0] ?? "", /no later turn to report back in/);

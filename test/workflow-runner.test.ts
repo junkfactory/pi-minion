@@ -4,6 +4,7 @@ import type { MinionRequest } from "../src/adapters/types.js";
 import {
   cancelWorkflow,
   startWorkflow,
+  STEP_RESULT_INSTRUCTION,
   tickWorkflowSchedule,
   type StepOutcome,
   type WorkflowDeps
@@ -92,9 +93,18 @@ describe("startWorkflow", () => {
     h.started[1].settle(h.ok("B"));
     await h.flush();
     assert.equal(h.started.length, 3);
-    assert.equal(h.started[2].request.task, "Check A\n\nResult of step b:\nB");
+    assert.equal(h.started[2].request.task, `Check A\n\nResult of step b:\nB${STEP_RESULT_INSTRUCTION}`);
     assert.equal(h.started[2].request.context, "No prior context.");
     assert.equal(h.wf.steps[2].jobId, "job-2");
+  });
+
+  it("appends the verbatim-result instruction to a non-terminal step task", async () => {
+    const h = harness([{ id: "a" }, { id: "b", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    // a is non-terminal (b depends on it), so its result feeds b.
+    assert.equal(h.started[0].request.task, `task a${STEP_RESULT_INSTRUCTION}`);
+    assert.ok(h.started[0].request.task.endsWith(STEP_RESULT_INSTRUCTION));
   });
 
   it("posts exactly one summary with triggerTurn, only after every step settles", async () => {
@@ -283,11 +293,14 @@ describe("scheduled workflows", () => {
     const h = scheduled([{ id: "a" }, { id: "b", dependsOn: ["a"] }]);
     startWorkflow("wf", h.deps);
     await h.flush();
-    assert.equal(h.started[0].request.task, "task a");
+    assert.equal(h.started[0].request.task, `task a${STEP_RESULT_INSTRUCTION}`);
     h.started[0].settle(h.ok("A"));
     await h.flush();
     // The appended dependency result comes before the stop instruction.
-    assert.equal(h.started[1].request.task, `task b\n\nResult of step a:\nA${STOP_SCHEDULE_INSTRUCTION}`);
+    assert.equal(
+      h.started[1].request.task,
+      `task b\n\nResult of step a:\nA${STEP_RESULT_INSTRUCTION}${STOP_SCHEDULE_INSTRUCTION}`
+    );
   });
 
   it("posts the summary quietly when no final step asks to stop", async () => {

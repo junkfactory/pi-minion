@@ -190,12 +190,17 @@ wrong type for) `models` or `allowedTools`. Two ways to hit it:
   while reading the new file on disk. `/reload` or restart pi after any
   change to the config schema.
 
-**A clean-exit result shows `[Showing lines 1-N of M ...]` instead of the
-full text.**
-Expected once a result exceeds `maxResultPreviewBytes` (default 50KB) — the
-full result is written to `<jobDir>/result.md` and only a line-capped
-preview is inlined into the primary session's context, to avoid burning
-tokens on a large payload the caller may not need in full. Read
-`result.md` directly (from the `offset` the notice names) for the rest, or
-raise `maxResultPreviewBytes` in `pi-minion.json` if truncation is
-undesired for your workload.
+**A clean-exit result shows `[Showing lines 1-N of M (4.0KB limit) ...]`
+instead of the full text.**
+That notice means the result exceeded `maxResultContextBytes` (default 4KB)
+— the model-facing completion message carries a head slice plus bracketed
+notices pointing at `<jobDir>/result.md`, so that a large payload doesn't
+ride along in the primary session's context on every turn. Raise
+`maxResultContextBytes` in `pi-minion.json` (or in your
+`~/.pi/agent/extensions/pi-minion.json` override) if you want more inlined.
+The full result always stays on disk at `<jobDir>/result.md`; read it
+directly (from the `offset` the notice names) for the rest. The collapsible
+`pi-minion-display` entry is a separate, UI-only copy — pi never sends it to
+the model — capped independently by `maxResultPreviewBytes` (default 50KB),
+so that display preview was never the cause of the model-facing notice. For
+deeper forensics, the raw CLI stream output is at `<jobDir>/stdout.json`.

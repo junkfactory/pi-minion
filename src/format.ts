@@ -198,12 +198,14 @@ export function formatJobFrontmatter(
 // display (matching how a Read tool reports its own truncation) so the
 // "offset" in the notice is directly usable against resultPath; byte-based
 // cutoff (matching maxOutputBytes' reasoning) since that's what actually
-// costs the caller context.
+// costs the caller context. maxBytes <= 0 is pointer-only: no body at all.
 export function truncateResultForContext(
   text: string,
   resultPath: string,
   maxBytes: number
 ): string {
+  if (maxBytes <= 0)
+    return `[Omitted: 0-byte context limit. Full result at ${resultPath} — read it only when necessary.]`;
   if (Buffer.byteLength(text) <= maxBytes) return text;
   const lines = text.split(/\r?\n/);
   let bytes = 0;
