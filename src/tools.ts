@@ -105,7 +105,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   }),
   context: Type.String({
     description:
-      'Prior findings, decisions, files, diffs, commands, or other evidence this task depends on — restate it verbatim, don\'t summarize it. A reference to an earlier job id is not enough, since this job cannot look it up. If this is a genuinely fresh task with no prior context, the whole value must be just that (e.g. "No prior context.") — never combine it with other details. Required so context is never silently left out.'
+      'Prior findings, decisions, files, diffs, commands, or other evidence this task depends on — pass task-relevant evidence verbatim, with file paths for additional context, not the entire report. A reference to an earlier job id is not enough, since this job cannot look it up. If this is a genuinely fresh task with no prior context, the whole value must be just that (e.g. "No prior context.") — never combine it with other details. Required so context is never silently left out.'
   }),
   maxBudgetUsd: Type.Optional(
     Type.Number({
@@ -129,7 +129,7 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
   }),
   context: Type.String({
     description:
-      'Shared by every step, with the same rules as run_pi_minion\'s `context`: restate real prior findings verbatim, or use exactly "No prior context." for a fresh task.'
+      'Shared by every step, with the same rules as run_pi_minion\'s `context`: pass task-relevant evidence verbatim with file paths, or use exactly "No prior context." for a fresh task.'
   }),
   maxBudgetUsd: Type.Optional(
     Type.Number({
@@ -335,7 +335,7 @@ export function registerTools(pi: ExtensionAPI): void {
       "Track jobs only with list_pi_minions and cancel_pi_minion — don't poll.",
       "For long-result tasks, tell the minion to lead with a concise TLDR — the posted summary may be truncated.",
       "Fill `context` every call — not just on retries.",
-      "For follow-ups, read the prior job's report file (list_pi_minions gives its reportPath) — never reconstruct findings from memory."
+      "For follow-ups, read relevant sections of the prior report (list_pi_minions gives its reportPath), expanding only when needed — never reconstruct findings from memory."
     ],
     parameters: RUN_PI_MINION_PARAMETERS,
     async execute(_toolCallId, request, _signal, _onUpdate, ctx) {
