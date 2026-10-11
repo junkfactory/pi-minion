@@ -21,7 +21,7 @@
   "shortcut": "alt+j",
   "showGlyphs": true,
   "adapterArgs": {
-    "pi": { "args": [], "preExec": [] },
+    "pi": { "args": ["-e", "builtin:mcp", "-e", "builtin:codemode"], "preExec": [] },
     "claude": { "args": [], "preExec": [] },
     "agy": { "args": [], "preExec": [] }
   }
