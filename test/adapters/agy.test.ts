@@ -330,7 +330,7 @@ describe("buildArgs", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     const task = args[0] ?? "";
     assert.match(task, /context-constrained orchestrator/);
-    assert.match(task, /concise summary — outcome, key findings or files changed, blockers/);
+    assert.match(task, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
   it("tells the minion not to background work and report back later", () => {

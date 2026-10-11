@@ -498,7 +498,7 @@ describe("buildArgs", () => {
   it("instructs the minion to return a concise structured summary", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1];
-    assert.match(systemPrompt, /concise summary — outcome, key findings or files changed, blockers/);
+    assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
   it("spreads adapterArgs.claude just before the task positional", () => {

@@ -211,7 +211,7 @@ describe("buildArgs", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     const systemPrompt = flagValue(args, "--append-system-prompt") ?? "";
     assert.match(systemPrompt, /context-constrained orchestrator/);
-    assert.match(systemPrompt, /concise summary — outcome, key findings or files changed, blockers/);
+    assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
   it("puts the task last, after -- so a leading dash isn't parsed as a flag", () => {
