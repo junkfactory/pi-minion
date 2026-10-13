@@ -13,6 +13,7 @@ import {
   sumFields,
   resolveAlias,
   deriveAliasClusters,
+  selectAllowedModels,
   selectAvailableModels
 } from "./util.js";
 import type { AliasCluster } from "./util.js";
@@ -359,15 +360,16 @@ export function createAgyAdapter(config: MinionConfig): AgentCliAdapter {
     },
     rawOwnsModel,
     availableModels() {
-      // help_pi_minion's universe: allowed∩rawOwns when the allowlist is
-      // non-empty, else exact catalog ids reflected live from agy's models
-      // snapshot (claude-* ids already excluded at parse). Derived aliases
-      // stay accepted at request time (ownsModel/resolveAlias) but are not
-      // listed — the main agent should pin an exact id instead of a stem
-      // that may drift across releases.
+      // help_pi_minion's universe: with a non-empty allowlist, glob entries
+      // expand against the live catalog snapshot (exact entries pass through
+      // as-is), else the snapshot's exact ids (claude-* ids already excluded
+      // at parse). Derived aliases stay accepted at request time
+      // (ownsModel/resolveAlias) but are not listed — the main agent should
+      // pin an exact id instead of a stem that may drift across releases.
+      const universe = cachedEntries().map((entry) => entry.id);
       const base = config.models?.allowed?.length
-        ? config.models.allowed.filter(rawOwnsModel)
-        : cachedEntries().map((entry) => entry.id);
+        ? selectAllowedModels(config.models.allowed, universe, rawOwnsModel)
+        : universe;
       return selectAvailableModels(base, config, providersOf);
     },
     providersOf,

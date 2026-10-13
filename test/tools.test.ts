@@ -97,9 +97,8 @@ describe("buildHelpModelList", () => {
     try {
       const result = buildHelpModelList([claudeOf(), piOf()]);
       // claude's own aliases (sonnet/opus/haiku/fable) + pi's live catalog:
-      // exact bare ids, then provider-qualified pairs, deduped across
-      // providers. Anything the adapters don't claim is filtered out.
-      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "gpt-6-luna", "opencode-go/gpt-6-luna", "other-go/gpt-6-luna"]);
+      // provider-qualified ids. Anything the adapters don't claim is filtered out.
+      assert.deepEqual(result, ["opus", "sonnet", "haiku", "fable", "opencode-go/gpt-6-luna", "other-go/gpt-6-luna"]);
     } finally {
       setModelRegistry(undefined);
     }
@@ -150,7 +149,7 @@ describe("buildHelpModelList", () => {
     );
   });
 
-  it("hides a shared alias when any backing provider is blocked", () => {
+  it("hides a provider's ref when that provider is blocked", () => {
     setModelRegistry(
       fakeModelRegistry([
         { id: "gpt-6-luna", provider: "opencode-go" },
@@ -164,10 +163,10 @@ describe("buildHelpModelList", () => {
       assert.ok(!blocked.includes("gpt-6-luna"), `blocked provider's id leaked: ${blocked.join(", ")}`);
       assert.ok(!blocked.includes("opencode-go/gpt-6-luna"), `blocked provider's qualified id leaked: ${blocked.join(", ")}`);
       assert.ok(blocked.includes("amazon-bedrock/gpt-5.6-luna"), `unblocked provider's qualified id missing: ${blocked.join(", ")}`);
-      assert.ok(blocked.includes("gpt-5.6-luna"), `unblocked provider's id missing: ${blocked.join(", ")}`);
+      assert.ok(!blocked.includes("gpt-5.6-luna"), `bare id should not be listed: ${blocked.join(", ")}`);
       const unrelatedConfig = fakeConfig({ models: { allowed: [], blocked: [] }, providers: { blocked: ["antigravity"] } });
       const unrelated = buildHelpModelList([claudeOf(unrelatedConfig), agyOf(unrelatedConfig), piOf(unrelatedConfig)]);
-      assert.ok(unrelated.includes("gpt-6-luna"), `gpt-6-luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
+      assert.ok(!unrelated.includes("gpt-6-luna"), `bare id should not be listed: ${unrelated.join(", ")}`);
       assert.ok(unrelated.includes("opencode-go/gpt-6-luna"), `opencode-go/gpt-6-luna missing when no backing provider is blocked: ${unrelated.join(", ")}`);
     } finally {
       setModelRegistry(undefined);

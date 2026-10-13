@@ -129,7 +129,7 @@ describe("rawOwnsModel / availableModels (config-gated)", () => {
     assert.equal(rawOwnsModel("totally-unknown"), false);
   });
 
-  it("enumerates exact catalog ids then provider-qualified pairs (never derived aliases) for help_pi_minion", () => {
+  it("enumerates provider-qualified refs in registry order (never bare ids or derived aliases) for help_pi_minion", () => {
     // Aliases like "luna"/"sol"/"pro" are deliberately absent: pi
     // fuzzy-resolves them at spawn, so enumerating one could drift to a
     // different version over time.
@@ -143,10 +143,6 @@ describe("rawOwnsModel / availableModels (config-gated)", () => {
     );
     try {
       assert.deepEqual(ungated.availableModels(), [
-        "gpt-6-luna",
-        "gpt-6.1-sol",
-        "gemini-3.1-pro",
-        "claude-opus-5-5",
         "openai-codex/gpt-6-luna",
         "openai-codex/gpt-6.1-sol",
         "google/gemini-3.1-pro",
@@ -157,12 +153,12 @@ describe("rawOwnsModel / availableModels (config-gated)", () => {
     }
   });
 
-  it("intersects an allowlist with the raw claim, even for a non-enumerated alias", () => {
+  it("intersects an allowlist with the raw claim: an enumerated bare entry lists qualified", () => {
     // "luna" is raw-owned (a catalog id ends with it) but deliberately not
     // enumerated in the default universe — an explicit allowlist that names
-    // it still surfaces it.
+    // it still surfaces it, qualified to keep the help list uniform.
     const adapter = createPiAdapter(fakeConfig({ models: { allowed: ["luna", "totally-unknown"], blocked: [] } }));
-    assert.deepEqual(adapter.availableModels(), ["luna"]);
+    assert.deepEqual(adapter.availableModels(), ["opencode-go/luna"]);
   });
 
   it("is empty when every provider is config-blocked", () => {
@@ -174,6 +170,71 @@ describe("rawOwnsModel / availableModels (config-gated)", () => {
     );
     assert.deepEqual(adapter.availableModels(), []);
     assert.equal(adapter.ownsModel("gpt-6-luna"), false);
+  });
+
+  it("expands globs against the catalog, judged per provider", () => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-6-luna", provider: "opencode" },
+        { id: "jev-latest", provider: "opencode" }
+      ])
+    );
+    try {
+      const adapter = createPiAdapter(
+        fakeConfig({ models: { allowed: ["opencode-go/*", "opencode/jev*"], blocked: [] } })
+      );
+      assert.deepEqual(adapter.availableModels(), ["opencode-go/gpt-6-luna", "opencode/jev-latest"]);
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
+
+  it("expands a mid-glob against the catalog", () => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode" },
+        { id: "gpt-5-codex", provider: "opencode" }
+      ])
+    );
+    try {
+      const adapter = createPiAdapter(
+        fakeConfig({ models: { allowed: ["opencode/gpt-*-luna"], blocked: [] } })
+      );
+      const models = adapter.availableModels();
+      assert.ok(models.includes("opencode/gpt-6-luna"), `mid-glob ref missing: ${models.join(", ")}`);
+      assert.ok(
+        !models.includes("opencode/gpt-5-codex"),
+        `non-matching ref leaked: ${models.join(", ")}`
+      );
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
+
+  it("matches a bare pattern against the bare id too, not just the qualified ref (N6)", () => {
+    setModelRegistry(
+      fakeModelRegistry([
+        { id: "gpt-6-luna", provider: "opencode-go" },
+        { id: "gpt-6-luna", provider: "opencode" },
+        { id: "jev-latest", provider: "opencode" }
+      ])
+    );
+    try {
+      const adapter = createPiAdapter(fakeConfig({ models: { allowed: ["gpt-6*"], blocked: [] } }));
+      const models = adapter.availableModels();
+      assert.ok(
+        models.includes("opencode-go/gpt-6-luna"),
+        `bare pattern failed to reach the qualified ref: ${models.join(", ")}`
+      );
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
+
+  it("a bare allowlist entry still gates the qualified request (N2)", () => {
+    const adapter = createPiAdapter(fakeConfig({ models: { allowed: ["gpt-6-luna"], blocked: [] } }));
+    assert.equal(adapter.ownsModel("opencode-go/gpt-6-luna"), true);
   });
 });
 

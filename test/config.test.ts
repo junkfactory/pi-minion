@@ -9,9 +9,11 @@ import {
   applyConfigOverride,
   isModelAllowed,
   isModelBlocked,
+  isModelPattern,
   isProviderAllowed,
   isProviderBlocked,
   loadConfig,
+  modelMatchesPattern,
   readShortcutConfigSync,
   resolveShortcut,
   USER_CONFIG_PATH
@@ -279,6 +281,42 @@ describe("isModelAllowed / isModelBlocked", () => {
   it("reports nothing blocked when models.blocked is absent", () => {
     assert.equal(isModelBlocked({}, "sonnet"), false);
     assert.equal(isModelAllowed({ models: {} }, "sonnet"), true);
+  });
+});
+
+describe("modelMatchesPattern / isModelPattern", () => {
+  it("matches braces, character classes, and mid-globs against real ids", () => {
+    for (const pattern of ["opencode/gpt-{5.6,6}-luna", "opencode/gpt-[56]*-luna", "opencode/gpt-*-luna"]) {
+      assert.equal(modelMatchesPattern("opencode/gpt-6-luna", pattern), true, pattern);
+      assert.equal(modelMatchesPattern("opencode/gpt-5.6-luna", pattern), true, pattern);
+      assert.equal(modelMatchesPattern("opencode/gpt-5-codex", pattern), false, pattern);
+    }
+  });
+
+  it("keeps '*' within a path segment (opencode/* never reaches opencode-go)", () => {
+    assert.equal(modelMatchesPattern("opencode/gpt-6-luna", "opencode/*"), true);
+    assert.equal(modelMatchesPattern("opencode-go/gpt-6-luna", "opencode/*"), false);
+  });
+
+  it("folds case under nocase (N4)", () => {
+    const config = fakeConfig({ models: { allowed: ["gpt-6-luna"], blocked: [] } });
+    assert.equal(isModelAllowed(config, "GPT-6-LUNA"), true);
+    assert.equal(modelMatchesPattern("GPT-6-LUNA", "gpt-6-luna"), true);
+  });
+
+  it("treats '!foo' as a literal, not a negation (nonegate, N5)", () => {
+    const config = fakeConfig({ models: { allowed: ["!foo"], blocked: [] } });
+    assert.equal(isModelAllowed(config, "!foo"), true);
+    assert.equal(isModelAllowed(config, "bar"), false);
+  });
+
+  it("classifies glob syntax as a pattern and plain ids as literals", () => {
+    for (const literal of ["claude-haiku-5-5", "luna", "!foo"]) {
+      assert.equal(isModelPattern(literal), false, literal);
+    }
+    for (const glob of ["claude-*", "gpt-?", "opencode/gpt-{5.6,6}-luna", "opencode-go/*"]) {
+      assert.equal(isModelPattern(glob), true, glob);
+    }
   });
 });
 

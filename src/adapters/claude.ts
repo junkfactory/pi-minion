@@ -8,7 +8,13 @@ import type {
   TokenCounts,
   UsageTotals
 } from "./types.js";
-import { MINION_PROMPT_BASE, resolveTaskText, selectAvailableModels, sumFields } from "./util.js";
+import {
+  MINION_PROMPT_BASE,
+  resolveTaskText,
+  selectAllowedModels,
+  selectAvailableModels,
+  sumFields
+} from "./util.js";
 import { isModelAllowed, isProviderAllowed } from "../config.js";
 
 // Exact wording from the `claude` CLI binary (v2.1.236), not a documented
@@ -412,10 +418,10 @@ export function createClaudeAdapter(config: MinionConfig): AgentCliAdapter {
     },
     rawOwnsModel,
     availableModels() {
-      const base =
-        config.models?.allowed?.length
-          ? config.models.allowed.filter(rawOwnsModel)
-          : [...CLAUDE_MODEL_ALIASES];
+      const universe = [...CLAUDE_MODEL_ALIASES];
+      const base = config.models?.allowed?.length
+        ? selectAllowedModels(config.models.allowed, universe, rawOwnsModel)
+        : universe;
       return selectAvailableModels(base, config, providersOf);
     },
     providersOf,

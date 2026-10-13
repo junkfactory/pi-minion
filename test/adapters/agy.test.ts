@@ -243,6 +243,13 @@ describe("availableModels (config-gated)", () => {
     assert.deepEqual(adapter.availableModels(), ["gemini-flash"]);
   });
 
+  it("expands a glob allowlist against the live snapshot", () => {
+    const adapter = createAgyAdapter(fakeConfig({ models: { allowed: ["gemini*"], blocked: [] } }));
+    const models = adapter.availableModels();
+    assert.ok(models.length > 0, "glob expansion produced nothing");
+    assert.ok(models.every((model) => model.startsWith("gemini-")), `non-gemini id listed: ${models.join(", ")}`);
+  });
+
   it("lists the exact catalog ids when the allowlist is empty", () => {
     assert.deepEqual(ungated.availableModels(), [
       "gemini-3.8-flash-high",

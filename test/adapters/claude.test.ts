@@ -69,6 +69,13 @@ describe("ownsModel / availableModels (config-gated)", () => {
     assert.ok(!adapter.availableModels().includes("gemini-3.8-flash-high"));
   });
 
+  it("treats a glob allowlist as a pattern, not a literal id", () => {
+    const glob = createClaudeAdapter(fakeConfig({ models: { allowed: ["claude-*"], blocked: [] } }));
+    assert.deepEqual(glob.availableModels(), []);
+    const exact = createClaudeAdapter(fakeConfig({ models: { allowed: ["claude-haiku-5-5"], blocked: [] } }));
+    assert.deepEqual(exact.availableModels(), ["claude-haiku-5-5"]);
+  });
+
   it("availableModels lists the four aliases when the allowlist is empty", () => {
     const adapter = createClaudeAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }));
     assert.deepEqual(adapter.availableModels(), ["opus", "sonnet", "haiku", "fable"]);

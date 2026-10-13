@@ -75,7 +75,7 @@ export const PI_MINION_EXAMPLES = [
   "Run a pi minion to explore this code base and summarize it",
   "Run a sonnet pi minion to debug this ticket",
   "Run an opus pi minion to review current changes at medium effort; budget $5",
-  "Use a workflow: two sonnet agents review the current changes for bugs and performance, then a gpt-6-luna agent verifies their findings"
+  "Use a workflow: two sonnet agents review the current changes for bugs and performance, then an opencode-go/gpt-6-luna agent verifies their findings"
 ];
 
 // Agent-facing (not human-facing): what the caller itself needs to know
@@ -84,7 +84,7 @@ export const PI_MINION_EXAMPLES = [
 export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result.",
   "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd.",
-  "model must be one of `models` above — already filtered to what's installed on this machine.",
+  "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude and agy entries are bare ids.",
   'If the user names a model vaguely or ambiguously (a brand like "gemini", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don\'t guess.',
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
   "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
@@ -97,7 +97,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   }),
   model: Type.String({
     description:
-      "A model usable on this machine; call help_pi_minion to list them."
+      "A model usable on this machine; call help_pi_minion to list them. pi models use the provider-qualified `provider/id` form (e.g. `opencode-go/gpt-6-luna`); claude and agy models are bare ids."
   }),
   effort: Type.String({
     description:
@@ -312,7 +312,7 @@ async function confirmWorkflowRequest(
 // isn't installed never enters the registry in the first place. An empty
 // models.allowed means "allow all", so the union is each adapter's full
 // self-declared offer (claude's alias names, agy's exact catalog ids, the pi
-// adapter's exact ids and provider/id pairs from its model registry). This
+// adapter's provider-qualified ids from its model registry). This
 // just dedups across adapters; everything else lives in the adapters.
 export function buildHelpModelList(adapters: AgentCliAdapter[]): string[] {
   return [...new Set(adapters.flatMap((adapter) => adapter.availableModels()))];

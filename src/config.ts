@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Minimatch, minimatch } from "minimatch";
 import type { KeyId } from "@earendil-works/pi-tui";
 import type { AdapterArgs, MinionConfig } from "./adapters/types.js";
 
@@ -84,19 +85,30 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
 // adapter can own is allowed (with the pi adapter routing against the live
 // catalog, that's every credential-available model on this machine; unknown
 // ids still fail at startJob with "Unknown model"). A non-empty list is a
-// strict whitelist — entries may carry the same trailing-'*' wildcard as
-// models.blocked.
-// Trailing '*' = prefix match ("gemini*" → startsWith("gemini"));
-// no '*' = exact match. A leading '*' would also be a prefix match of
-// the remainder, so guard: only a TRAILING '*' is a wildcard.
-// Matching is on the raw request string: a provider-qualified
-// "opencode-go/gpt-6-luna" must be listed (or covered by a pattern like
-// "opencode-go/*") to pass a non-empty allowlist — help and validateRequest
-// apply the same rule.
-function modelMatchesPattern(model: string, pattern: string): boolean {
-  return pattern.endsWith("*")
-    ? model.startsWith(pattern.slice(0, -1))
-    : model === pattern;
+// strict whitelist — entries are minimatch globs (see modelMatchesPattern),
+// the same surface as models.blocked.
+// Glob options shared by models and providers entries. Case-insensitive, as
+// pi's enabledModels is. Negation is off: these are OR allow/deny lists, where
+// a "!pattern" would match everything except it — exclusions belong in
+// models.blocked / providers.blocked.
+const GLOB_OPTIONS = { nocase: true, nonegate: true } as const;
+
+// Glob-match the raw request string: "*" within a path segment, "?" one
+// character, "[seq]" a class, "{a,b}" alternatives, extglobs, and "**" across
+// segments. "*" does not cross "/", so "opencode/*" never matches
+// "opencode-go/..." — a provider-qualified "opencode-go/gpt-6-luna" needs
+// "opencode-go/*" or an exact entry, and help/validateRequest share the rule.
+export function modelMatchesPattern(model: string, pattern: string): boolean {
+  return minimatch(model, pattern, GLOB_OPTIONS);
+}
+
+// True when an entry uses glob syntax, via minimatch's own parse (any
+// non-literal part, or brace alternatives). The help list uses it to tell an
+// expandable pattern from a concrete id, so a glob matching nothing is ignored
+// rather than listed literally. Parsed with default matching options on
+// purpose: under nocase, hasMagic() reports plain ids as magic.
+export function isModelPattern(pattern: string): boolean {
+  return new Minimatch(pattern, { magicalBraces: true }).hasMagic();
 }
 
 // Validates the { allowed?: string[]; blocked?: string[] } filter blocks
@@ -148,7 +160,7 @@ export function isProviderBlocked(
 }
 
 // Same contract as isModelAllowed: blocked wins, empty allowed = no
-// allowlist; pattern matching reuses modelMatchesPattern (trailing '*'),
+// allowlist; pattern matching reuses modelMatchesPattern (minimatch globs),
 // case-insensitive on both sides.
 export function isProviderAllowed(
   config: Pick<MinionConfig, "providers">,

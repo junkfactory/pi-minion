@@ -1,7 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { MinionConfig, MinionRequest } from "./types.js";
-import { isModelAllowed, isProviderAllowed } from "../config.js";
+import {
+  isModelAllowed,
+  isModelPattern,
+  isProviderAllowed,
+  modelMatchesPattern
+} from "../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -55,13 +60,41 @@ export async function commandExists(command: string): Promise<boolean> {
 export function selectAvailableModels(
   base: string[],
   config: Pick<MinionConfig, "models" | "providers">,
-  providersOf: (model: string) => string[]
+  providersOf: (model: string) => string[],
+  isAllowed: (model: string) => boolean = (model) => isModelAllowed(config, model)
 ): string[] {
   return base.filter(
     (model) =>
       (providersOf(model).length === 0 || providersOf(model).every((p) => isProviderAllowed(config, p))) &&
-      isModelAllowed(config, model)
+      isAllowed(model)
   );
+}
+
+// Non-empty models.allowed: the entries this adapter owns, with glob entries
+// expanded against the adapter's own universe into the concrete strings they
+// match (so ["opencode-go/*"] lists ids, not the literal pattern). A plain
+// entry the universe doesn't enumerate (an alias like "luna") is kept as-is; a
+// glob that matches nothing expands to nothing. models.allowed order is
+// preserved; duplicates collapse. The provider/blocked gates still run
+// afterward in selectAvailableModels. `matches` defaults to the raw-string
+// glob; the pi adapter passes one that also tests a ref's bare id, so a bare
+// pattern reaches a provider-qualified ref (as pi's enabledModels does).
+export function selectAllowedModels(
+  allowed: string[],
+  universe: string[],
+  rawOwnsModel: (model: string) => boolean,
+  matches: (model: string, entry: string) => boolean = modelMatchesPattern
+): string[] {
+  const out: string[] = [];
+  for (const entry of allowed) {
+    const hit = universe.filter((model) => matches(model, entry) && rawOwnsModel(model));
+    if (hit.length > 0) {
+      out.push(...hit);
+    } else if (!isModelPattern(entry) && rawOwnsModel(entry)) {
+      out.push(entry);
+    }
+  }
+  return [...new Set(out)];
 }
 
 // ---- Derived alias clusters (shared by the agy and pi adapters) ----

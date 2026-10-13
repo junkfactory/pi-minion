@@ -9,8 +9,18 @@ import type {
   UsageTotals
 } from "./types.js";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { MINION_PROMPT_BASE, resolveTaskText, sumFields, selectAvailableModels } from "./util.js";
-import { isModelAllowed, isProviderAllowed } from "../config.js";
+import {
+  MINION_PROMPT_BASE,
+  resolveTaskText,
+  selectAllowedModels,
+  selectAvailableModels,
+  sumFields
+} from "./util.js";
+import {
+  isModelAllowed,
+  isProviderAllowed,
+  modelMatchesPattern
+} from "../config.js";
 
 // Captured from the extension ctx by pi-minion.ts's session_start handler
 // (same capture-and-refresh shape as jobUI's setCtx): the parent pi process
@@ -23,17 +33,48 @@ export function setModelRegistry(registry: ModelRegistry | undefined): void {
   modelRegistry = registry;
 }
 
-// help_pi_minion's universe when models.allowed is empty: exact catalog
-// ids first, then provider/id pairs (pi's own disambiguation syntax).
-// Derived aliases ("luna") are deliberately NOT enumerated — pi
-// fuzzy-resolves them at spawn, so an alias can drift to a different
-// version over time; the caller should settle on an exact id with the
-// user instead. Aliases remain accepted at request time (ownsModel).
-function enumerateModelIds(): string[] {
+// help_pi_minion's universe when models.allowed is empty, and the strings its
+// patterns expand against: every catalog entry as its provider-qualified id —
+// the form help lists and pi's --model accepts ("provider/id"). Enumerating
+// per provider (not bare ids) lets the providers.allowed/blocked gate judge a
+// shared id once per provider: providersOf(ref) is that one provider, so
+// blocking "opencode" hides opencode/* and keeps opencode-go/*, where a bare
+// id would be judged against every backing provider at once. Derived aliases
+// ("luna") are deliberately NOT enumerated — pi fuzzy-resolves them at spawn,
+// so an alias can drift to a different version over time; the caller should
+// settle on an exact id with the user instead. Aliases remain accepted at
+// request time (ownsModel).
+function enumerateModelRefs(): string[] {
   const available = modelRegistry?.getAvailable() ?? [];
-  const ids = [...new Set(available.map((model) => model.id))];
-  const qualified = [...new Set(available.map((model) => `${model.provider}/${model.id}`))];
-  return [...ids, ...qualified];
+  return [...new Set(available.map((model) => `${model.provider}/${model.id}`))];
+}
+
+// "provider/id" -> "id"; a string with no slash is already bare.
+function bareId(model: string): string {
+  const slash = model.indexOf("/");
+  return slash === -1 ? model : model.slice(slash + 1);
+}
+
+// An exact models.allowed entry may be bare ("luna"), so list it qualified to
+// keep the help list uniform. A string the catalog can't identify is echoed
+// unchanged. Idempotent — an already qualified "provider/id" keeps its
+// provider.
+function qualifyModel(model: string): string[] {
+  const providers = providersOf(model);
+  if (providers.length === 0) return [model];
+  const id = bareId(model);
+  return providers.map((provider) => `${provider}/${id}`);
+}
+
+// models.allowed matches the raw request string, and pi accepts both "id" and
+// "provider/id" for one model. Help lists the qualified form, so a bare
+// allowlist entry must still gate the qualified request: check the request,
+// then its bare id. (A qualified entry gating a bare request was already
+// rejected before this change.)
+function isPiModelAllowed(config: MinionConfig, model: string): boolean {
+  if (isModelAllowed(config, model)) return true;
+  const id = bareId(model);
+  return id !== model && isModelAllowed(config, id);
 }
 
 // pi's --model accepts patterns (short alias names like "luna" fuzzy-match
@@ -324,17 +365,30 @@ export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
       "one or more actions were denied during this run; the result below may be incomplete.",
     capabilities,
     ownsModel(model) {
-      return rawOwnsModel(model) && providerGate(model) && isModelAllowed(config, model);
+      return rawOwnsModel(model) && providerGate(model) && isPiModelAllowed(config, model);
     },
     rawOwnsModel,
     availableModels() {
-      // allowed∩rawOwns when models.allowed is non-empty, else exact
-      // catalog ids, then provider/id pairs (pi's own disambiguation
-      // syntax) — never derived aliases.
+      const universe = enumerateModelRefs();
       const base = config.models?.allowed?.length
-        ? config.models.allowed.filter(rawOwnsModel)
-        : enumerateModelIds();
-      return selectAvailableModels(base, config, providersOf);
+        ? selectAllowedModels(
+            config.models.allowed,
+            universe,
+            rawOwnsModel,
+            // pi's enabledModels matches a pattern against both the full
+            // "provider/id" and the bare id, so a bare pattern reaches a
+            // qualified ref here too.
+            (ref, entry) =>
+              modelMatchesPattern(ref, entry) || modelMatchesPattern(bareId(ref), entry)
+          )
+        : universe;
+      return [
+        ...new Set(
+          selectAvailableModels(base, config, providersOf, (model) => isPiModelAllowed(config, model)).flatMap(
+            qualifyModel
+          )
+        )
+      ];
     },
     providersOf,
     startSession: (ctx) => setModelRegistry(ctx.modelRegistry),

@@ -14,8 +14,9 @@ export type AdapterArgs = { args: string[]; preExec: string[] };
 
 export type MinionConfig = {
   // Model-id filter: { allowed?: string[]; blocked?: string[] }, symmetric
-  // with providers. Entries are exact model ids or a trailing-'*' prefix
-  // pattern ("gemini*" matches gemini-flash, gemini-pro, ...). blocked wins
+  // with providers. Entries are minimatch globs, matched case-insensitively
+  // ("gemini*" matches gemini-flash, gemini-pro, ...; "*" does not cross
+  // "/"; negation is off). blocked wins
   // over allowed; empty/absent allowed = no allowlist (every routable model
   // passes); empty/absent blocked = nothing blocked. Replaced wholesale by
   // user override.
