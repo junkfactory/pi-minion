@@ -87,7 +87,7 @@ export const PI_MINION_USAGE_NOTES = [
   "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude and agy entries are bare ids.",
   'If the user names a model vaguely or ambiguously (a brand like "gemini", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don\'t guess.',
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
-  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; one summary at the end starts a turn; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
+  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; a step that fails while the run continues posts one alert that starts a turn immediately, and one summary at the end starts a turn of its own with each step's TLDR inlined; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
   "schedule_pi_minion_workflow takes run_pi_minion_workflow's fields plus a cron expression; the user approves once when it is scheduled, then each tick starts a fresh run (skipped while the previous run is still going) whose summary posts quietly. It needs exactly one final step (one no other step depends on); only that step may end the schedule by finishing its reply with the stop marker; stop it with cancel_pi_minion_schedule (a run in progress is cancelled separately with cancel_pi_minion_workflow and the schedule's lastWorkflowId)."
 ];
 
@@ -615,7 +615,7 @@ export function registerTools(pi: ExtensionAPI): void {
     name: "run_pi_minion_workflow",
     label: "Run Pi Minion Workflow",
     description:
-      "Run several pi-minion steps as a dependency graph in the background: steps with no unfinished dependencies run in parallel (up to 4 at once), and a step can embed an earlier step's output with {{steps.<id>.result}}. The user approves the plan in a confirm dialog first. Steps post no result of their own; one summary at the end starts a turn. Returns at once with the workflow id.",
+      "Run several pi-minion steps as a dependency graph in the background: steps with no unfinished dependencies run in parallel (up to 4 at once), and a step can embed an earlier step's output with {{steps.<id>.result}}. The user approves the plan in a confirm dialog first. Steps post no result of their own; a failed step posts an alert that starts a turn immediately (the run keeps going), and one summary at the end starts a turn. Each step's first line is its TLDR; read a `reportPath` only when that isn't enough. Returns at once with the workflow id.",
     promptSnippet:
       "Run a multi-step pi-minion workflow (parallel steps, then verify/synthesize)",
     promptGuidelines: [
@@ -625,7 +625,8 @@ export function registerTools(pi: ExtensionAPI): void {
       MODEL_EFFORT_GUIDELINE,
       "Steps are stateless — write each task self-contained.",
       STEP_TASK_GUIDELINE,
-      "Track only with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll."
+      "Track only with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll.",
+      "A step failure alerts you mid-run — cancel the workflow only when the failure makes the rest pointless."
     ],
     parameters: RUN_PI_MINION_WORKFLOW_PARAMETERS,
     async execute(_toolCallId, request, _signal, _onUpdate, ctx) {
@@ -658,7 +659,7 @@ export function registerTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "schedule_pi_minion_workflow",
     label: "Schedule Pi Minion Workflow",
-    description: `Run a pi-minion workflow repeatedly on a cron schedule. Takes the same fields as run_pi_minion_workflow plus \`cron\`. The user approves the plan and schedule once, in a confirm dialog; later ticks never ask again. Each tick starts a fresh workflow (skipped while the previous one is still going) whose summary posts to this transcript without starting a turn. It must have exactly one final step (one no other step depends on); only that step is told it can end the schedule by finishing its reply with ${STOP_SCHEDULE_MARKER}, and that run's summary does start a turn. Otherwise it lasts until cancel_pi_minion_schedule or this session quits.`,
+    description: `Run a pi-minion workflow repeatedly on a cron schedule. Takes the same fields as run_pi_minion_workflow plus \`cron\`. The user approves the plan and schedule once, in a confirm dialog; later ticks never ask again. Each tick starts a fresh workflow (skipped while the previous one is still going); a failed step in a tick posts an alert that starts a turn immediately while the schedule keeps running, and the run's summary stays quiet unless the run ended the schedule or no step succeeded. It must have exactly one final step (one no other step depends on); only that step is told it can end the schedule by finishing its reply with ${STOP_SCHEDULE_MARKER}, and that run's summary does start a turn. Otherwise it lasts until cancel_pi_minion_schedule or this session quits.`,
     promptSnippet:
       "Schedule a recurring multi-step pi-minion workflow with a cron expression",
     promptGuidelines: [

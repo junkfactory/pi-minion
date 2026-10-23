@@ -123,11 +123,16 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   on "No"; declining runs nothing, and a session without a UI refuses.
 - The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
   on pi or agy are marked "no cost ceiling" and counted separately.
-- Steps post no end-of-job message; one summary at the end (per-step status,
-  model, `token_usage`, `cost_usd`, `reportPath`) starts the single main-agent
-  turn.
+- Steps post no end-of-job message; a step that fails while the run continues
+  posts one alert that starts a turn immediately, and one summary at the end
+  (per-step status, model, `token_usage`, `cost_usd`, `reportPath`) starts a
+  turn of its own with each step's TLDR inlined — read a `reportPath` only
+  when that isn't enough.
 - A failed, skipped, or cancelled step skips its dependents while independent
   branches keep going.
+- A step with dependents is told to lead its reply with a 3-5 line TLDR (its
+  first line becomes the summary's TLDR) and keep detail after it; terminal
+  steps keep the standing concise prompt.
 
 Either the agent proposes a workflow in chat first, or you ask for one ("use
 a workflow ..."). Workflows live in memory only and stop when their session
@@ -145,9 +150,10 @@ run `run_pi_minion_workflow` on a cron schedule.
   dialog (which adds the cron, next run, and per-run budget) is the only
   approval — later ticks never ask again.
 - Each tick starts a fresh workflow, skipped (logged `status=skipped`) while
-  the previous one is still going. Its summary posts without starting a turn
-  unless no step of the run succeeded, in which case it starts one and says
-  so.
+  the previous one is still going. A failed step in a tick posts an alert
+  that starts a turn immediately while the schedule keeps running; the run's
+  summary posts without starting a turn unless the run ended the schedule or
+  no step succeeded, in which case it starts one and says so.
 - Each step's budget cap is fixed when the schedule is approved, not re-read
   from `pi-minion.json` on later runs.
 - The workflow must have exactly one final step (one no other step depends

@@ -93,18 +93,22 @@ describe("startWorkflow", () => {
     h.started[1].settle(h.ok("B"));
     await h.flush();
     assert.equal(h.started.length, 3);
-    assert.equal(h.started[2].request.task, `Check A\n\nResult of step b:\nB${STEP_RESULT_INSTRUCTION}`);
+    assert.equal(h.started[2].request.task, `Check A\n\nResult of step b:\nB`);
     assert.equal(h.started[2].request.context, "No prior context.");
     assert.equal(h.wf.steps[2].jobId, "job-2");
   });
 
-  it("appends the verbatim-result instruction to a non-terminal step task", async () => {
+  it("appends the TLDR-first instruction to a step something depends on", async () => {
     const h = harness([{ id: "a" }, { id: "b", dependsOn: ["a"] }]);
     startWorkflow("wf", h.deps);
     await h.flush();
     // a is non-terminal (b depends on it), so its result feeds b.
     assert.equal(h.started[0].request.task, `task a${STEP_RESULT_INSTRUCTION}`);
     assert.ok(h.started[0].request.task.endsWith(STEP_RESULT_INSTRUCTION));
+    h.started[0].settle(h.ok("A"));
+    await h.flush();
+    // b is terminal (nothing depends on it), so it keeps the concise prompt.
+    assert.ok(!h.started[1].request.task.includes(STEP_RESULT_INSTRUCTION));
   });
 
   it("posts exactly one summary with triggerTurn, only after every step settles", async () => {
@@ -158,9 +162,11 @@ describe("startWorkflow", () => {
     assert.equal(h.started.length, 3, "e started");
     h.started[2].settle(h.ok("E"));
     await h.flush();
-    assert.equal(h.posts.length, 1);
-    assert.match(h.posts[0].content, /workflow failed/);
-    assert.match(h.posts[0].content, /- c: skipped/);
+    assert.equal(h.posts.length, 2, "the alert, then the summary");
+    assert.match(h.posts[0].content, /workflow step failed/);
+    assert.equal(h.posts[1].triggerTurn, true);
+    assert.match(h.posts[1].content, /workflow failed/);
+    assert.match(h.posts[1].content, /- c: skipped/);
   });
 
   it("treats a step that fails to spawn as failed instead of hanging", async () => {
@@ -197,6 +203,62 @@ describe("startWorkflow", () => {
     h.started[0].settle(h.ok("x"));
     await h.flush();
     assert.equal(h.started.length, MAX_PARALLEL_STEPS + 1);
+  });
+});
+
+describe("failure alerts", () => {
+  it("posts one alert as soon as a step fails, then the run's one summary", async () => {
+    const h = harness([{ id: "a" }, { id: "b" }, { id: "c", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({ ok: false, errorReason: "boom" });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    assert.equal(h.posts[0].triggerTurn, true);
+    assert.match(h.posts[0].content, /workflow step failed/);
+    assert.match(h.posts[0].content, /Blocked: c/);
+    assert.match(h.posts[0].content, /Still going: b \(running\)/);
+    assert.match(h.posts[0].content, /cancel_pi_minion_workflow wf/);
+
+    h.started[1].settle(h.ok("B"));
+    await h.flush();
+    assert.equal(h.posts.length, 2);
+    assert.doesNotMatch(h.posts[1].content, /step failed/);
+    assert.match(h.posts[1].content, /workflow failed/);
+    assert.equal(h.posts[1].triggerTurn, true);
+
+    const failures = h.logs.filter((l) => l.event === "step_failed");
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].info.detail ?? "", /failed=a$/);
+  });
+
+  it("posts only the summary when the failure settles the run", async () => {
+    const h = harness([{ id: "a" }, { id: "b", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({ ok: false, errorReason: "boom" });
+    await h.flush();
+    assert.deepEqual(h.wf.steps.map((s) => s.status), ["failed", "skipped"]);
+    assert.equal(h.posts.length, 1);
+    assert.doesNotMatch(h.posts[0].content, /step failed/);
+    assert.match(h.posts[0].content, /workflow failed/);
+    assert.equal(h.posts[0].triggerTurn, true);
+  });
+
+  it("keeps one alert when a second step fails later, and the summary lists both", async () => {
+    const h = harness([{ id: "a" }, { id: "b" }, { id: "c", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({ ok: false, errorReason: "a broke" });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    h.started[1].settle({ ok: false, errorReason: "b broke" });
+    await h.flush();
+    assert.equal(h.posts.length, 2);
+    assert.doesNotMatch(h.posts[1].content, /step failed/);
+    assert.match(h.posts[1].content, /- a: failed/);
+    assert.match(h.posts[1].content, /- b: failed/);
+    assert.equal(h.logs.filter((l) => l.event === "step_failed").length, 1);
   });
 });
 
@@ -299,7 +361,7 @@ describe("scheduled workflows", () => {
     // The appended dependency result comes before the stop instruction.
     assert.equal(
       h.started[1].request.task,
-      `task b\n\nResult of step a:\nA${STEP_RESULT_INSTRUCTION}${STOP_SCHEDULE_INSTRUCTION}`
+      `task b\n\nResult of step a:\nA${STOP_SCHEDULE_INSTRUCTION}`
     );
   });
 
@@ -311,6 +373,25 @@ describe("scheduled workflows", () => {
     await h.flush();
     assert.equal(h.posts.length, 1);
     assert.equal(h.posts[0].triggerTurn, false);
+    assert.equal(h.stops(), 0);
+  });
+
+  it("alerts on a scheduled tick's failure, then posts its summary quietly", async () => {
+    const h = scheduled([{ id: "a" }, { id: "b" }, { id: "c", dependsOn: ["a"] }]);
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    h.started[0].settle({ ok: false, errorReason: "boom" });
+    await h.flush();
+    assert.equal(h.posts.length, 1);
+    assert.equal(h.posts[0].triggerTurn, true);
+    assert.match(h.posts[0].content, /workflow step failed/);
+    assert.match(h.posts[0].content, /cancel_pi_minion_schedule/);
+
+    h.started[1].settle(h.ok("B"));
+    await h.flush();
+    assert.equal(h.posts.length, 2);
+    assert.match(h.posts[1].content, /workflow failed/);
+    assert.equal(h.posts[1].triggerTurn, false);
     assert.equal(h.stops(), 0);
   });
 

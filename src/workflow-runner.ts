@@ -13,6 +13,7 @@ import { distinctModels } from "./format.js";
 import { logJobEvent, type JobLogEvent } from "./log.js";
 import { hasStopMarker, STOP_SCHEDULE_INSTRUCTION, schedules, stopSchedule } from "./schedule-store.js";
 import {
+  formatWorkflowAlert,
   formatWorkflowSummary,
   isWorkflowRunning,
   MAX_PARALLEL_STEPS,
@@ -26,10 +27,12 @@ import {
   type WorkflowStep
 } from "./workflow-store.js";
 
-// Workflow steps hand their result to downstream steps ({{steps.<id>.result}},
-// appended by renderStepTask), so the shared concise-summary instruction must
-// not apply to them: each step task carries this to demand its full output.
-export const STEP_RESULT_INSTRUCTION = `\n\nYour final reply is consumed verbatim by later workflow steps. Return your complete output verbatim in your final reply; do not summarize.`;
+// Steps something depends on hand their reply to those steps ({{steps.<id>.result}},
+// appended by renderStepTask) as a truncated head slice plus a pointer to the
+// full result, so they lead with a TLDR and keep the detail after it. A step
+// nothing depends on has no downstream consumer but the orchestrator, so it
+// inherits the standing concise-summary prompt instead.
+export const STEP_RESULT_INSTRUCTION = `\n\nLater workflow steps receive your final reply (a truncated preview of it, plus a pointer to your full result). Lead with a 3-5 line TLDR of the outcome, the findings or files they need, and any blockers; put the detail after it rather than summarizing it away.`;
 
 export type StepOutcome = {
   finalResult?: string;
@@ -155,13 +158,43 @@ function pump(id: string, wf: MinionWorkflow, deps: WorkflowDeps): void {
     startStep(id, wf, step, deps);
   }
   syncUi(id, wf, deps);
+  // A failure that settles the run posts only the summary (one post, one
+  // turn); a failure with work still in flight alerts now instead of waiting
+  // for the graph to drain.
   if (wf.steps.every((step) => step.status !== "pending" && step.status !== "running")) {
     finishWorkflow(id, wf, true, deps);
+    return;
   }
+  alertFailure(id, wf, deps);
+}
+
+// One early alert per run, the first time a step fails while other steps are
+// still going, so the orchestrator can react (or cancel) without waiting for
+// the whole DAG. It always starts a turn: for a scheduled run that turn is the
+// decision point between stopping the schedule and letting the next tick run.
+// `step_failed` is reused as the log event (pre-spawn failures already log it;
+// this adds the workflow-level line).
+function alertFailure(id: string, wf: MinionWorkflow, deps: Pick<WorkflowDeps, "post" | "log">): void {
+  if (wf.alertedAt !== undefined) return;
+  const failed = wf.steps.filter((step) => step.status === "failed");
+  if (failed.length === 0) return;
+  wf.alertedAt = Date.now();
+  deps.log("step_failed", logInfo(id, wf, `failed=${failed.map((step) => step.id).join(",")}`));
+  deps.post(
+    wf.sessionId,
+    formatWorkflowAlert(id, wf),
+    {
+      id,
+      alert: "step_failed",
+      steps: wf.steps.map((step) => ({ id: step.id, status: step.status, jobId: step.jobId }))
+    },
+    true
+  );
 }
 
 function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: WorkflowDeps): void {
   step.status = "running";
+  const terminal = terminalStepIds(wf.steps).has(step.id);
   const settle = (outcome: StepOutcome) => {
     // A cancelled step's job still exits and reports; ignore it.
     if (step.status !== "running") return;
@@ -172,7 +205,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     step.finishedAt = outcome.finishedAt;
     step.tokenUsage = outcome.tokenUsage;
     step.totalCostUsd = outcome.totalCostUsd;
-    if (outcome.ok && wf.scheduled && terminalStepIds(wf.steps).has(step.id) && hasStopMarker(outcome.finalResult)) {
+    if (outcome.ok && wf.scheduled && terminal && hasStopMarker(outcome.finalResult)) {
       wf.stopRequested = true;
     }
     pump(id, wf, deps);
@@ -180,8 +213,8 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
   const request: MinionRequest = {
     task:
       renderStepTask(step.task, wf.steps, wf.maxResultPreviewBytes, step.dependsOn) +
-      STEP_RESULT_INSTRUCTION +
-      (wf.scheduled && terminalStepIds(wf.steps).has(step.id) ? STOP_SCHEDULE_INSTRUCTION : ""),
+      (terminal ? "" : STEP_RESULT_INSTRUCTION) +
+      (wf.scheduled && terminal ? STOP_SCHEDULE_INSTRUCTION : ""),
     workspace: wf.cwd,
     model: step.model,
     effort: step.effort,

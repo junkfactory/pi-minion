@@ -14,6 +14,7 @@ import {
   isWorkflowRunning,
   pruneWorkflows,
   formatWorkflowSummary,
+  formatWorkflowAlert,
   MAX_WORKFLOW_STEPS,
   referencedStepIds,
   rehomeWorkflows,
@@ -220,8 +221,9 @@ describe("formatWorkflowConfirm", () => {
         "Stage 2",
         "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · starts when bugs, perf finish; uses its result",
         "",
-        "Each agent works in the background in this workspace. You'll get one summary",
-        "when all finish; cancel anytime with \"cancel the workflow\".",
+        "Each agent works in the background in this workspace. A failed step alerts",
+        "you right away; one summary posts when all finish. Cancel anytime with \"cancel",
+        "the workflow\".",
         "",
         "Run this workflow?"
       ].join("\n")
@@ -365,13 +367,61 @@ describe("workflow status helpers", () => {
     wf.steps[1].status = "skipped";
     delete wf.steps[0].reportPath;
     const text = formatWorkflowSummary(wf);
-    assert.match(text, /- bugs: failed · sonnet · Unknown model "opencode-go\/luna"/);
+    assert.match(text, /- bugs: failed · sonnet\n {2}Unknown model "opencode-go\/luna"/);
     assert.match(text, /- verify: skipped · luna$/m);
-    assert.doesNotMatch(text, /Read each step's reportPath/);
+    assert.doesNotMatch(text, /Open a step's reportPath/);
+  });
+
+  it("inlines a step's first non-empty result line as an indented TLDR, capped at 200 chars", () => {
+    const wf = fakeWorkflow();
+    wf.steps[0].result = "\n  Shipped the fix.  \nMore detail here.";
+    const text = formatWorkflowSummary(wf);
+    assert.ok(text.includes("- bugs: done · sonnet · [/r/bugs.md](file:///r/bugs.md)\n  Shipped the fix."));
+    assert.match(text, /Open a step's reportPath only when its TLDR above isn't enough\./);
+
+    wf.steps[0].result = "z".repeat(300);
+    const capped = formatWorkflowSummary(wf);
+    assert.ok(capped.includes(`\n  ${"z".repeat(200)}\n`));
+    assert.ok(!capped.includes("z".repeat(201)));
   });
 
   it("formats the picker label with progress and running step ids", () => {
     assert.equal(formatWorkflowLabel(fakeWorkflow()), "⇉ Review MR · 1/2 steps · verify");
+  });
+
+  it("formats an alert with the failed step, what it blocked, and what is still going", () => {
+    const wf = fakeWorkflow({
+      steps: [
+        { id: "a", task: "t", model: "sonnet", effort: "medium", dependsOn: [], status: "failed", result: "spawn failed" },
+        { id: "b", task: "t", model: "sonnet", effort: "medium", dependsOn: ["a"], status: "skipped" },
+        { id: "c", task: "t", model: "luna", effort: "low", dependsOn: [], status: "running", jobId: "j3" },
+        { id: "d", task: "t", model: "sonnet", effort: "medium", dependsOn: [], status: "pending" }
+      ]
+    });
+    assert.equal(
+      formatWorkflowAlert("wf1", wf),
+      [
+        "## Pi minion workflow step failed: Review MR",
+        "",
+        "- a: failed · sonnet\n  spawn failed",
+        "",
+        "Blocked: b",
+        "",
+        "Still going: c (running), d (pending)",
+        "",
+        "The workflow keeps going — cancel it with cancel_pi_minion_workflow wf1 if this failure makes it pointless."
+      ].join("\n")
+    );
+  });
+
+  it("names the schedule's decision on a scheduled run's alert", () => {
+    const wf = fakeWorkflow({ scheduled: { stop: () => true } });
+    wf.steps[0].status = "failed";
+    const text = formatWorkflowAlert("wf1", wf);
+    assert.match(text, /The schedule keeps running; this alert starts a turn so you can decide\./);
+    assert.match(text, /cancel_pi_minion_schedule/);
+    assert.doesNotMatch(text, /cancel_pi_minion_workflow/);
+    assert.doesNotMatch(text, /Blocked:/);
   });
 
   it("builds the widget status with current stage and resolved effort", () => {

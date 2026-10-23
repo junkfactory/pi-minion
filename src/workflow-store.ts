@@ -60,6 +60,9 @@ export type MinionWorkflow = {
   startedAt: number;
   cancelled: boolean;
   finishedAt?: number;
+  // Set when the one early step-failure alert posted; later failures in the
+  // same run ride in the final summary instead of starting more turns.
+  alertedAt?: number;
   // Set on a run started by a schedule tick: the final summary posts quietly,
   // and a final step ending its reply with the stop marker calls `stop`.
   scheduled?: { stop: () => boolean };
@@ -381,7 +384,7 @@ export function formatWorkflowConfirm(
     ...(scheduleLines
       ? [
           ...text(
-            "Each agent works in the background in this workspace. Each run posts one\nquiet summary when all its steps finish.",
+            "Each agent works in the background in this workspace. A failed step alerts\nyou right away — that tick starts a turn, and the schedule keeps running;\notherwise each run posts one quiet summary when its steps finish.",
             true
           ),
           [],
@@ -391,7 +394,7 @@ export function formatWorkflowConfirm(
         ]
       : [
           ...text(
-            "Each agent works in the background in this workspace. You'll get one summary\nwhen all finish; cancel anytime with \"cancel the workflow\".",
+            "Each agent works in the background in this workspace. A failed step alerts\nyou right away; one summary posts when all finish. Cancel anytime with \"cancel\nthe workflow\".",
             true
           ),
           [],
@@ -409,6 +412,29 @@ export function workflowStatus(wf: Pick<MinionWorkflow, "cancelled" | "steps">):
   return wf.steps.every((step) => step.status === "done") ? "done" : "failed";
 }
 
+// A step's first non-empty line, capped: under STEP_RESULT_INSTRUCTION that
+// line is the TLDR the orchestrator needs, and the reportPath link carries
+// the detail it must ask for.
+const TLDR_LENGTH = 200;
+function resultHead(step: WorkflowStep): string | undefined {
+  return step.result
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+    ?.slice(0, TLDR_LENGTH);
+}
+
+// One summary/alert bullet: status, model, usage, report link, then its TLDR
+// (which is also the failure reason for a step that never produced a report).
+function stepBullet(step: WorkflowStep): string {
+  const head = resultHead(step);
+  const stats = step.tokenUsage
+    ? ` · ${formatTokenUsage(step.tokenUsage.input, step.tokenUsage.output, step.tokenUsage.cacheWrite, step.tokenUsage.cacheRead)} · ${formatCostUsd(step.totalCostUsd).replaceAll("$", "\\$")}`
+    : "";
+  const link = step.reportPath ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})` : "";
+  return `- ${step.id}: ${step.status} · ${step.model}${stats}${link}${head ? `\n  ${head}` : ""}`;
+}
+
 // The workflow's single end-of-run post: one line per step with its status,
 // model, usage, cost and reportPath link rather than inlined results.
 export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?: string): string {
@@ -418,24 +444,7 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     .filter(([, n]) => n > 0)
     .map(([name, n]) => `${n} ${name}`)
     .join(", ");
-  const stats = (step: WorkflowStep): string => {
-    if (!step.tokenUsage) return "";
-    const { input, output, cacheWrite, cacheRead } = step.tokenUsage;
-    const cost = formatCostUsd(step.totalCostUsd).replaceAll("$", "\\$");
-    return ` · ${formatTokenUsage(input, output, cacheWrite, cacheRead)} · ${cost}`;
-  };
-  // No reportPath but a result (pre-spawn failure reason, or a result.md
-  // write that failed): show it inline so a failed step says why.
-  const lines = wf.steps.map(
-    (step) =>
-      `- ${step.id}: ${step.status} · ${step.model}${stats(step)}${
-        step.reportPath
-          ? ` · [${step.reportPath}](${pathToFileURL(step.reportPath).href})`
-          : step.result
-            ? ` · ${step.result.replaceAll("\n", " ").slice(0, 300)}`
-            : ""
-      }`
-  );
+  const lines = wf.steps.map(stepBullet);
   return [
     `## Pi minion workflow ${status}: ${wf.title}`,
     "",
@@ -443,10 +452,32 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     "",
     ...lines,
     ...(wf.steps.some((step) => step.reportPath)
-      ? ["", "Read each step's reportPath for its full result."]
+      ? ["", "Open a step's reportPath only when its TLDR above isn't enough."]
       : []),
     ...(note ? ["", `**Schedule stopped:** ${note}`] : []),
     ...(alert ? ["", `**Needs attention:** ${alert}`] : [])
+  ].join("\n");
+}
+
+// The interim post a step failure earns while its run continues: the failed
+// step's own bullet (reason included), what it blocked, and what is still
+// going. Posted once per run; the final summary carries everything else.
+export function formatWorkflowAlert(id: string, wf: MinionWorkflow): string {
+  const failed = wf.steps.filter((step) => step.status === "failed");
+  const blocked = wf.steps.filter((step) => step.status === "skipped");
+  const live = wf.steps.filter((step) => step.status === "pending" || step.status === "running");
+  return [
+    `## Pi minion workflow step failed: ${wf.title}`,
+    "",
+    ...failed.map(stepBullet),
+    ...(blocked.length ? ["", `Blocked: ${joinIds(blocked.map((step) => step.id))}`] : []),
+    ...(live.length
+      ? ["", `Still going: ${live.map((step) => `${step.id} (${step.status})`).join(", ")}`]
+      : []),
+    "",
+    wf.scheduled
+      ? `The schedule keeps running; this alert starts a turn so you can decide. Stop it with cancel_pi_minion_schedule, or leave it to the next tick.`
+      : `The workflow keeps going — cancel it with cancel_pi_minion_workflow ${id} if this failure makes it pointless.`
   ].join("\n");
 }
 
