@@ -215,7 +215,8 @@ pi install git:github.com/junkfactory/pi-minion
 ```
 
 Pi clones the repo, installs its runtime dependencies (`croner`), and loads
-`src/pi-minion.ts` directly — there is no build step. Manage the install with
+`extensions/index.ts` directly — there is no build step; that entry re-exports
+`src/pi-minion.ts`. Manage the install with
 `pi list` / `pi remove`; pin a tag with
 `pi install git:github.com/junkfactory/pi-minion@v0.1.0` if you prefer.
 
@@ -232,7 +233,7 @@ Local packages are not touched by pi, so the `npm install` step matters
 persistent install, load the source directly:
 
 ```bash
-pi -e ./src/pi-minion.ts
+pi -e ./extensions/index.ts
 ```
 
 Restart pi (or run `/reload`) after any install method.
@@ -277,9 +278,9 @@ the extension.
 Verification — unit suite, live smoke battery, interactive/UI checks — is
 documented in [TESTING.md](TESTING.md).
 
-There is no build step — Pi loads `src/pi-minion.ts` directly via its own TS loader
-(`package.json`'s `pi.extensions` field points at the source file, not a
-compiled artifact).
+There is no build step — Pi loads `extensions/index.ts` directly via its own TS
+loader (`package.json`'s `pi.extensions` field points at that source entry,
+which re-exports `src/pi-minion.ts`; there is no compiled artifact).
 
 **Adding a fix or feature:**
 

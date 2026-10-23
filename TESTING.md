@@ -12,8 +12,9 @@ npm run check   # tsc --noEmit
 npm run test    # node --import jiti/register --test "test/**/*.test.ts"
 ```
 
-There is no build step — Pi loads `src/pi-minion.ts` directly via its own TS
-loader, so the suite runs against source.
+There is no build step — Pi loads `extensions/index.ts` (which re-exports
+`src/pi-minion.ts`) directly via its own TS loader, so the suite runs against
+source.
 
 ## Live smoke battery
 
@@ -74,7 +75,7 @@ Run against a real Pi session before considering interactive/TUI changes
 `ctx`/`tui` and can't observe real terminal rendering:
 
 ```bash
-pi -e ./src/pi-minion.ts -p "some prompt that exercises the change"
+pi -e ./extensions/index.ts -p "some prompt that exercises the change"
 ```
 
 ## Manual checklist for UI changes (widget, picker, modal)

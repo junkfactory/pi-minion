@@ -160,7 +160,7 @@ conflicts are only logged to the console outside a TUI session, so a
 colliding `~/.pi/agent/keybindings.json` entry can silently win instead.
 
 **Extension fails to load after an edit.**
-`pi -e ./src/pi-minion.ts -p "..."` surfaces load errors (e.g. `ParseError`) with
+`pi -e ./extensions/index.ts -p "..."` surfaces load errors (e.g. `ParseError`) with
 file/line — use it to isolate a syntax or type error before assuming the
 failure is in extension logic.
 
