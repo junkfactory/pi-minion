@@ -126,8 +126,8 @@ starts as soon as its `dependsOn` steps are done and receives their results.
 - Steps post no end-of-job message; a step that fails while the run continues
   posts one alert that starts a turn immediately, and one summary at the end
   (per-step status, model, `token_usage`, `cost_usd`, `reportPath`) starts a
-  turn of its own with each step's TLDR inlined — read a `reportPath` only
-  when that isn't enough.
+  turn of its own with each step's TLDR inlined — open the `reportPath` of
+  the one step whose TLDR isn't enough, never every report.
 - A failed, skipped, or cancelled step skips its dependents while independent
   branches keep going.
 - A step with dependents is told to lead its reply with a 3-5 line TLDR (its

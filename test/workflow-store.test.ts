@@ -377,7 +377,10 @@ describe("workflow status helpers", () => {
     wf.steps[0].result = "\n  Shipped the fix.  \nMore detail here.";
     const text = formatWorkflowSummary(wf);
     assert.ok(text.includes("- bugs: done · sonnet · [/r/bugs.md](file:///r/bugs.md)\n  Shipped the fix."));
-    assert.match(text, /Open a step's reportPath only when its TLDR above isn't enough\./);
+    assert.match(
+      text,
+      /Open the reportPath of the step whose TLDR above isn't enough — that one file, not every report\./
+    );
 
     wf.steps[0].result = "z".repeat(300);
     const capped = formatWorkflowSummary(wf);

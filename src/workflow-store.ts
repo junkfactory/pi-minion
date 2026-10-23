@@ -452,7 +452,7 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
     "",
     ...lines,
     ...(wf.steps.some((step) => step.reportPath)
-      ? ["", "Open a step's reportPath only when its TLDR above isn't enough."]
+      ? ["", "Open the reportPath of the step whose TLDR above isn't enough — that one file, not every report."]
       : []),
     ...(note ? ["", `**Schedule stopped:** ${note}`] : []),
     ...(alert ? ["", `**Needs attention:** ${alert}`] : [])
