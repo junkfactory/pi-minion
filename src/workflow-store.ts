@@ -9,7 +9,7 @@ import type {
   WorkflowWidgetStatus
 } from "./agent.ui.js";
 import { formatTokenUsage } from "./agent.ui.js";
-import { deriveJobTitle, formatCostUsd, truncateResultForContext } from "./format.js";
+import { deriveJobTitle, formatCostUsd, formatDurationMs, truncateResultForContext } from "./format.js";
 import { glyph } from "./glyphs.js";
 import type { WorkflowSession } from "./child-session.js";
 import { jobMeta } from "./job-store.js";
@@ -26,12 +26,14 @@ export type WorkflowStepDef = {
   effort: string;
   dependsOn?: string[];
   maxBudgetUsd?: number;
+  timeoutMs?: number;
 };
 
 export type WorkflowDef = {
   title: string;
   context: string;
   maxBudgetUsd?: number;
+  timeoutMs?: number;
   steps: WorkflowStepDef[];
 };
 
@@ -51,6 +53,7 @@ export type MinionWorkflow = {
   title: string;
   context: string;
   maxBudgetUsd?: number;
+  timeoutMs?: number;
   // pi-minion.json's maxResultPreviewBytes at creation.
   maxResultPreviewBytes: number;
   cwd: string;
@@ -83,6 +86,7 @@ export function newWorkflow(
     title: def.title,
     context: def.context,
     maxBudgetUsd: def.maxBudgetUsd,
+    timeoutMs: def.timeoutMs,
     ...env,
     steps: def.steps.map((step) => ({ ...step, dependsOn: step.dependsOn ?? [], status: "pending" as const })),
     startedAt: Date.now(),
@@ -210,6 +214,14 @@ function stepBudget(
   return step.maxBudgetUsd ?? def.maxBudgetUsd ?? config.maxBudgetUsd;
 }
 
+function stepTimeout(
+  step: Pick<WorkflowStepDef, "timeoutMs">,
+  def: Pick<WorkflowDef, "timeoutMs">,
+  config: Pick<MinionConfig, "timeoutMs">
+): number {
+  return step.timeoutMs ?? def.timeoutMs ?? config.timeoutMs;
+}
+
 // pi and agy don't enforce maxBudgetUsd (adapter capabilities), so a step on
 // them has no real cost ceiling. An unresolvable model counts as enforced:
 // validation reports it before any dialog.
@@ -246,11 +258,21 @@ function formatBudgetCap(total: number, unenforced: number): string {
   return total > 0 ? `budget cap $${total.toFixed(2)} + ${steps}` : steps;
 }
 
-// Pins each step's effective cap (step, else workflow, else config) into the
-// definition, so a schedule's later runs use what the user approved rather
-// than whatever pi-minion.json says by then.
-export function withEffectiveBudgets(def: WorkflowDef, config: Pick<MinionConfig, "maxBudgetUsd">): WorkflowDef {
-  return { ...def, steps: def.steps.map((step) => ({ ...step, maxBudgetUsd: stepBudget(step, def, config) })) };
+// Pins each step's effective cap and timeout (step, else workflow, else config)
+// into the definition, so a schedule's later runs use what the user approved
+// rather than whatever pi-minion.json says by then.
+export function withEffectiveLimits(
+  def: WorkflowDef,
+  config: Pick<MinionConfig, "maxBudgetUsd" | "timeoutMs">
+): WorkflowDef {
+  return {
+    ...def,
+    steps: def.steps.map((step) => ({
+      ...step,
+      maxBudgetUsd: stepBudget(step, def, config),
+      timeoutMs: stepTimeout(step, def, config)
+    }))
+  };
 }
 
 // Steps nothing depends on: a scheduled workflow's last word, so only these
@@ -343,7 +365,7 @@ export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: 
 // Stages are display-only groups; each step line names exactly what it waits for.
 export function formatWorkflowConfirm(
   def: WorkflowDef,
-  config: Pick<MinionConfig, "maxBudgetUsd">,
+  config: Pick<MinionConfig, "maxBudgetUsd" | "timeoutMs">,
   // Extra lines for a scheduled workflow; also swaps the closing question.
   scheduleLines?: string[],
   enforces: (model: string) => boolean = modelEnforcesBudget
@@ -368,6 +390,7 @@ export function formatWorkflowConfirm(
         { text: `  • ${id}: ${deriveJobTitle(step.task, CONFIRM_STEP_TITLE_LENGTH)} — ` },
         { text: `${step.model}, ${step.effort} effort`, style: "effort", effort: step.effort }
       ];
+      line.push({ text: ` · ≤${formatDurationMs(stepTimeout(step, def, config))}`, style: "muted" });
       if (!enforces(step.model)) line.push({ text: " · no cost ceiling", style: "muted" });
       const deps = step.dependsOn ?? [];
       if (deps.length > 0) {

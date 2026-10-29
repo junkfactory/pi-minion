@@ -41,6 +41,9 @@ import { applyModalEvent } from "./modal.js";
 import { createOutputCapture } from "./output-capture.js";
 import { pruneWorkflows } from "./workflow-store.js";
 
+// Node's setTimeout clamps a larger delay to 1 ms, so a limit above this would
+// expire instantly instead of never; reject it in validateRequest instead.
+const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_PREVIEW_BYTES = 8_192;
 const MAX_PREVIEW_LINE_LENGTH = 64;
 const STATUS_UPDATE_INTERVAL_MS = 1_000;
@@ -74,6 +77,16 @@ export async function validateRequest(
     (!Number.isFinite(request.maxBudgetUsd) || request.maxBudgetUsd <= 0)
   ) {
     throw new Error("maxBudgetUsd must be a positive number");
+  }
+  if (
+    request.timeoutMs !== undefined &&
+    (!Number.isFinite(request.timeoutMs) ||
+      request.timeoutMs <= 0 ||
+      request.timeoutMs > MAX_TIMEOUT_MS)
+  ) {
+    throw new Error(
+      `timeoutMs must be a positive number of milliseconds no greater than ${MAX_TIMEOUT_MS} (Node's setTimeout limit)`
+    );
   }
   if (!request.task.trim()) throw new Error("task is required");
   if (!request.effort?.trim())
@@ -292,10 +305,12 @@ export async function startJob(
     stopProcess
   );
 
+  // The caller's per-run limit wins; config.timeoutMs is the fallback backstop.
+  const runTimeoutMs = validRequest.timeoutMs ?? config.timeoutMs;
   const timeout = setTimeout(() => {
     timedOut = true;
     stopProcess();
-  }, config.timeoutMs);
+  }, runTimeoutMs);
   jobs.set(id, {
     process: proc,
     timeout,
@@ -348,6 +363,7 @@ export async function startJob(
       ...usageFields(finalUsage),
       perModel: finalUsage?.perModel,
       maxBudgetUsd: request.maxBudgetUsd ?? config.maxBudgetUsd,
+      timeoutMs: runTimeoutMs,
       jobDir,
       reportPath,
       step: workflowStep?.title
@@ -373,7 +389,7 @@ export async function startJob(
     if (
       !beginFinalize(
         "exited",
-        `exit_code=${code ?? "null"} signal=${signal ?? "none"}${timedOut ? " timed_out=true" : ""}${output.exceededOutputLimit ? " exceeded_output_limit=true" : ""}`
+        `exit_code=${code ?? "null"} signal=${signal ?? "none"}${timedOut ? " timed_out=true" : ""} timeout_ms=${runTimeoutMs}${output.exceededOutputLimit ? " exceeded_output_limit=true" : ""}`
       )
     )
       return;

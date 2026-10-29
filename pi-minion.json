@@ -13,7 +13,7 @@
     "mcp__*"
   ],
   "maxBudgetUsd": 5,
-  "timeoutMs": 900000,
+  "timeoutMs": 600000,
   "pruneAfterDays": 3,
   "maxOutputBytes": 15000000,
   "maxResultPreviewBytes": 50000,

@@ -30,12 +30,12 @@ import {
   workflowWidgetStatus,
   workflowBudget,
   unenforcedStepIds,
-  withEffectiveBudgets,
+  withEffectiveLimits,
   type MinionWorkflow,
   type WorkflowStepDef
 } from "../src/workflow-store.js";
 
-const config = { maxBudgetUsd: 5 };
+const config = { maxBudgetUsd: 5, timeoutMs: 600_000 };
 
 // ownsModel routes against the captured catalog — seed one covering the
 // pi-adapter models these tests reference (files run in isolated test
@@ -216,10 +216,10 @@ describe("formatWorkflowConfirm", () => {
       [
         "",
         "Stage 1 (start right away, in parallel)",
-        "  • bugs: Find bugs in the auth changes — sonnet, medium effort",
-        "  • perf: Find performance issues — sonnet, high effort",
+        "  • bugs: Find bugs in the auth changes — sonnet, medium effort · ≤10m",
+        "  • perf: Find performance issues — sonnet, high effort · ≤10m",
         "Stage 2",
-        "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · starts when bugs, perf finish; uses its result",
+        "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · ≤10m · starts when bugs, perf finish; uses its result",
         "",
         "Each agent works in the background in this workspace. A failed step alerts",
         "you right away; one summary posts when all finish. Cancel anytime with \"cancel",
@@ -247,8 +247,8 @@ describe("formatWorkflowConfirm", () => {
     assert.deepEqual(find("  • a:")[1], { text: "sonnet, high effort", style: "effort", effort: "high" });
     const b = find("  • b:");
     assert.equal(b[1]!.effort, "medium");
-    assert.equal(b[2]!.style, "muted");
-    assert.match(b[2]!.text, /starts when a finishes; uses its result/);
+    assert.equal(b[3]!.style, "muted");
+    assert.match(b[3]!.text, /starts when a finishes; uses its result/);
     assert.equal(find("Run this workflow?")[0]!.style, undefined);
   });
 });
@@ -267,7 +267,7 @@ describe("budget display with unenforced adapters", () => {
     const { title, lines } = formatWorkflowConfirm(workflow, config, undefined, enforces);
     assert.equal(title, "T — 3 pi minions in 1 stage, budget cap $2.00 + 2 steps with no cost ceiling");
     const text = plain(lines);
-    assert.match(text, /• b: Task b — gpt-5, medium effort · no cost ceiling/);
+    assert.match(text, /• b: Task b — gpt-5, medium effort · ≤10m · no cost ceiling/);
     assert.doesNotMatch(text.split("\n").find((l) => l.includes("• a:"))!, /no cost ceiling/);
     const marker = lines.find((line) => line[0]?.text.startsWith("  • b:"))!.at(-1)!;
     assert.equal(marker.style, "muted");
@@ -286,15 +286,35 @@ describe("budget display with unenforced adapters", () => {
   });
 });
 
-describe("withEffectiveBudgets", () => {
+describe("withEffectiveLimits", () => {
   it("pins step ?? workflow ?? config caps into each step", () => {
-    const pinned = withEffectiveBudgets(
+    const pinned = withEffectiveLimits(
       { title: "T", context: "c", maxBudgetUsd: 3, steps: def({ id: "a" }, { id: "b", maxBudgetUsd: 1 }) },
       config
     );
     assert.deepEqual(pinned.steps.map((step) => step.maxBudgetUsd), [3, 1]);
-    const noWorkflowCap = withEffectiveBudgets({ title: "T", context: "c", steps: def({ id: "a" }) }, config);
+    const noWorkflowCap = withEffectiveLimits({ title: "T", context: "c", steps: def({ id: "a" }) }, config);
     assert.equal(noWorkflowCap.steps[0].maxBudgetUsd, 5);
+  });
+
+  it("pins step ?? workflow ?? config timeouts into each step", () => {
+    const pinned = withEffectiveLimits(
+      { title: "T", context: "c", timeoutMs: 10, steps: def({ id: "a" }, { id: "b", timeoutMs: 2 }) },
+      config
+    );
+    assert.deepEqual(pinned.steps.map((step) => step.timeoutMs), [10, 2]);
+    const noWorkflowTimeout = withEffectiveLimits({ title: "T", context: "c", steps: def({ id: "a" }) }, config);
+    assert.equal(noWorkflowTimeout.steps[0].timeoutMs, 600_000);
+  });
+
+  it("shows each step's effective timeout as a compact duration in the confirm dialog", () => {
+    const { lines } = formatWorkflowConfirm(
+      { title: "T", context: "c", timeoutMs: 600_000, steps: def({ id: "a" }, { id: "b", timeoutMs: 60_000 }) },
+      config
+    );
+    const text = plain(lines);
+    assert.match(text, /• a: Task a — sonnet, medium effort · ≤10m/);
+    assert.match(text, /• b: Task b — sonnet, medium effort · ≤1m/);
   });
 });
 
@@ -303,7 +323,7 @@ describe("formatWorkflowConfirm step descriptions", () => {
     const task = "List the three largest files in the repository and report their sizes in bytes please";
     const { lines } = formatWorkflowConfirm(
       { title: "T", context: "c", steps: [{ id: "a", task, model: "sonnet", effort: "medium" }] },
-      { maxBudgetUsd: 5 }
+      { maxBudgetUsd: 5, timeoutMs: 600_000 }
     );
     assert.match(plain(lines), /• a: List the three largest files in the repository and report their sizes in bytes/);
     assert.ok(!plain(lines).includes("please"));
@@ -491,7 +511,7 @@ describe("scheduled workflow helpers", () => {
     const scheduleLines = formatWorkflowScheduleLines("0 9 * * 1-5", new Date(2026, 8, 30, 9, 0), 7.5, now);
     const { lines } = formatWorkflowConfirm(
       { title: "T", context: "c", steps: [{ id: "a", task: "Do a thing", model: "sonnet", effort: "medium" }] },
-      { maxBudgetUsd: 5 },
+      { maxBudgetUsd: 5, timeoutMs: 600_000 },
       scheduleLines
     );
     assert.match(plain(lines), /Runs on "0 9 \* \* 1-5" — next run 09:00/);

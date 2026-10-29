@@ -57,7 +57,7 @@ import {
   newWorkflow,
   resolveOwnedWorkflow,
   unenforcedStepIds,
-  withEffectiveBudgets,
+  withEffectiveLimits,
   isWorkflowRunning,
   validateScheduledWorkflowGraph,
   validateWorkflowGraph,
@@ -74,7 +74,7 @@ import {
 export const PI_MINION_EXAMPLES = [
   "Run a pi minion to explore this code base and summarize it",
   "Run a sonnet pi minion to debug this ticket",
-  "Run an opus pi minion to review current changes at medium effort; budget $5",
+  "Run an opus pi minion to review current changes at medium effort; budget $5; timeout 10 minutes",
   "Use a workflow: two sonnet agents review the current changes for bugs and performance, then an opencode-go/gpt-6-luna agent verifies their findings"
 ];
 
@@ -83,7 +83,7 @@ export const PI_MINION_EXAMPLES = [
 // descriptions.
 export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result.",
-  "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd.",
+  "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd; timeoutMs is optional and overrides the config default (help_pi_minion prints that default under `defaults`).",
   "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude and agy entries are bare ids.",
   'If the user names a model vaguely or ambiguously (a brand like "gemini", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don\'t guess.',
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
@@ -112,6 +112,12 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
       description:
         "Override the minion's cost ceiling in USD for this run. Defaults to the configured maxBudgetUsd."
     })
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description:
+        "Wall-clock limit for this run in milliseconds; the run is stopped when it elapses. Set it on every call — the config default is a runaway backstop, not a plan. help_pi_minion prints the current default."
+    })
   )
 });
 
@@ -135,6 +141,12 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
     Type.Number({
       description:
         "Default cost ceiling in USD per step. Defaults to the configured maxBudgetUsd."
+    })
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description:
+        "Default wall-clock limit per step in milliseconds; a step's own timeoutMs overrides it; defaults to the config timeoutMs."
     })
   ),
   steps: Type.Array(
@@ -162,6 +174,12 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
       ),
       maxBudgetUsd: Type.Optional(
         Type.Number({ description: "Override the cost ceiling for this step." })
+      ),
+      timeoutMs: Type.Optional(
+        Type.Number({
+          description:
+            "Wall-clock limit for this step in milliseconds; overrides the workflow default."
+        })
       )
     }),
     { minItems: 1, maxItems: MAX_WORKFLOW_STEPS }
@@ -174,8 +192,9 @@ export const SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
 });
 
 // Every step is validated before any dialog, so a bad model fails before the
-// user is asked anything.
-async function validateWorkflowSteps(
+// user is asked anything. `timeoutMs` resolves step ?? workflow, the same value
+// startStep passes on, so a limit rejected at spawn is rejected here first.
+export async function validateWorkflowSteps(
   request: Static<typeof RUN_PI_MINION_WORKFLOW_PARAMETERS>,
   cwd: string,
   config: Awaited<ReturnType<typeof loadConfig>>
@@ -191,6 +210,7 @@ async function validateWorkflowSteps(
           effort: step.effort,
           context: request.context,
           maxBudgetUsd: step.maxBudgetUsd ?? request.maxBudgetUsd,
+          timeoutMs: step.timeoutMs ?? request.timeoutMs,
           workspace: cwd
         },
         cwd,
@@ -335,6 +355,7 @@ export function registerTools(pi: ExtensionAPI): void {
       "Track jobs only with list_pi_minions and cancel_pi_minion — don't poll.",
       "For long-result tasks, tell the minion to lead with a concise TLDR — the posted summary may be truncated.",
       "Fill `context` every call — not just on retries.",
+      "Set timeoutMs on every run to the wall-clock limit the task actually needs (a few-file review 5-10 min; a repo-wide audit 20-30 min); omitting it falls back to the config default.",
       "For follow-ups, read relevant sections of the prior report (list_pi_minions gives its reportPath), expanding only when needed — never reconstruct findings from memory."
     ],
     parameters: RUN_PI_MINION_PARAMETERS,
@@ -466,9 +487,10 @@ export function registerTools(pi: ExtensionAPI): void {
         schedule.resolvedModel = scheduleResolvedModel(schedule);
         try {
           // Read from the schedule, not this closure: rehomeSchedules moves
-          // it to the replacement session after /new, fork, or resume.
+          // it to the replacement session after /new, fork, or resume, and
+          // the request's timeoutMs is pinned at creation.
           const jobId: string = await startJob(
-            { ...request, task: request.task + STOP_SCHEDULE_INSTRUCTION },
+            { ...schedule.request, task: schedule.request.task + STOP_SCHEDULE_INSTRUCTION },
             schedule.cwd,
             schedule.sessionId,
             schedule.sessionFile,
@@ -497,7 +519,9 @@ export function registerTools(pi: ExtensionAPI): void {
       schedules.set(id, {
         title,
         cron,
-        request,
+        // timeoutMs pinned now: every tick runs under the limit the user
+        // scheduled, not whatever pi-minion.json says by then.
+        request: { ...request, timeoutMs: request.timeoutMs ?? config.timeoutMs },
         effort: request.effort,
         cwd: ctx.cwd,
         sessionId,
@@ -625,6 +649,7 @@ export function registerTools(pi: ExtensionAPI): void {
       MODEL_EFFORT_GUIDELINE,
       "Steps are stateless — write each task self-contained.",
       STEP_TASK_GUIDELINE,
+      "Set each step's timeoutMs to the wall-clock limit that step actually needs (a few-file review 5-10 min; a repo-wide audit 20-30 min); omitting it falls back to the workflow or config default.",
       "Track only with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll.",
       "A step failure alerts you mid-run — cancel the workflow only when the failure makes the rest pointless."
     ],
@@ -698,7 +723,7 @@ export function registerTools(pi: ExtensionAPI): void {
         title: request.title,
         cron,
         // Caps pinned now: runs use the approved budget, not a later config value.
-        def: withEffectiveBudgets(request, config),
+        def: withEffectiveLimits(request, config),
         maxResultPreviewBytes:
           config.maxResultPreviewBytes ?? DEFAULT_MAX_RESULT_PREVIEW_BYTES,
         cwd: ctx.cwd,
@@ -805,7 +830,11 @@ export function registerTools(pi: ExtensionAPI): void {
       const payload = {
         models: buildHelpModelList(listAdapters()),
         examples: PI_MINION_EXAMPLES,
-        usageNotes: PI_MINION_USAGE_NOTES
+        usageNotes: PI_MINION_USAGE_NOTES,
+        defaults: {
+          timeoutMs: config.timeoutMs,
+          maxBudgetUsd: config.maxBudgetUsd
+        }
       };
       return textResult(JSON.stringify(payload, null, 2), payload);
     }

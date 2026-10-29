@@ -109,6 +109,18 @@ export function formatCostUsd(totalCostUsd: number | undefined): string {
   return totalCostUsd === undefined ? "n/a" : `$${totalCostUsd.toFixed(4)}`;
 }
 
+// Whole seconds is the finest grain worth showing for a wall-clock limit, so
+// a 45s limit reads "45s" rather than "45000ms"; zero remainders are dropped.
+export function formatDurationMs(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (totalSeconds < 60) return `${seconds}s`;
+  if (hours < 1) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
 // Renders a "(claude-haiku-4-5-20251001 37.0K + claude-sonnet-5 10.0K)" suffix, largest contributor
 // first, so a run that quietly delegated to another model is visible right
 // next to the total it fed into. Omitted for a single-model run — the
@@ -157,6 +169,9 @@ export function formatJobFrontmatter(
     effort?: string;
     perModel?: ModelBreakdown[];
     maxBudgetUsd: number;
+    // The limit that actually applied: the request's timeoutMs, else the
+    // config default.
+    timeoutMs: number;
     jobDir: string;
     // Only set when the minion's full result was actually written to disk
     // (the clean-exit, non-empty-result path) — omitted for timeouts,
@@ -177,6 +192,7 @@ export function formatJobFrontmatter(
     // LaTeX and prints the rest of the paragraph raw, report link included.
     `cost_usd: ${formatCostUsd(params.totalCostUsd)}${formatModelBreakdown(params.perModel, (entry) => entry.costUsd, (n) => formatCostUsd(n))}`.replaceAll("$", "\\$"),
     `budget_usd: \\$${params.maxBudgetUsd}`,
+    `timeout: ${formatDurationMs(params.timeoutMs)}`,
     `output_path: ${params.jobDir}`,
     // A markdown link so pi's renderer makes it clickable (OSC 8). Only the
     // filename shows — its directory is output_path, right above.

@@ -51,7 +51,7 @@ model vaguely, surface similar ids from that list for them to approve.
 
 ### Delegate a task
 
-**`run_pi_minion(task, model, effort, context, maxBudgetUsd?)`** — spawn a
+**`run_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?)`** — spawn a
 background job. Spawns `claude -p --permission-mode auto ...` as a detached
 child process and returns a job ID immediately, so your session keeps working
 while the minion runs. The result arrives later as a transcript message plus a
@@ -65,6 +65,9 @@ collapsible `pi-minion-display` entry.
   prior findings/decisions this task depends on verbatim, or pass exactly
   `"No prior context."` — mixing the escape hatch with other details is
   rejected.
+- `timeoutMs` is that run's wall-clock limit and overrides the config
+  default; set it per task. An expired run reports "timed out before
+  finishing" and points at the job's `stdout.json`.
 - A clean-exit result is capped by `maxResultContextBytes` (default 4KB)
   and followed by the instruction "If you need more detail, see the report
   linked above and any files it references." (omitted when no `result.md`
@@ -84,8 +87,8 @@ for a follow-up task.
 
 ### Schedule jobs
 
-**`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, cron)`** —
-run the same request on a cron schedule (local time, 5 or 6 fields, via
+**`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
+cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
 [croner](https://github.com/hexagon/croner)).
 
 - Each tick spawns an ordinary `run_pi_minion` job; its result posts to the
@@ -93,6 +96,8 @@ run the same request on a cron schedule (local time, 5 or 6 fields, via
   your next prompt). A spawn failure does start one.
 - A tick is skipped (logged `status=skipped`) while the previous run is still
   going.
+- It takes the same fields as `run_pi_minion`, `timeoutMs` included; every tick
+  uses the limit captured when the schedule was created.
 - A run can end its own schedule: it's told to finish its reply with
   `[[STOP_SCHEDULE]]` alone on the last line once the goal is fully complete.
   That result posts with a "Schedule stopped" note and does start a turn
@@ -107,9 +112,10 @@ workflow schedule).
 
 ### Run workflows
 
-**`run_pi_minion_workflow(title, context, maxBudgetUsd?, steps)`** — run a
-small dependency graph of minion jobs: `steps: [{ id, task, model, effort,
-dependsOn?, maxBudgetUsd? }]`, at most 10, up to 4 running at once. A step
+**`run_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?, steps)`**
+— run a small dependency graph of minion jobs: `steps: [{ id, task, model,
+effort, dependsOn?, maxBudgetUsd?, timeoutMs? }]`, at most 10, up to 4 running
+at once. A step
 starts as soon as its `dependsOn` steps are done and receives their results.
 
 - A step's task inlines a dependency's output where it says
@@ -143,8 +149,9 @@ session's workflows (status plus each step's `jobId` and `reportPath`), or
 cancel one: pending steps are cancelled, running steps are stopped, and the
 summary posts quietly.
 
-**`schedule_pi_minion_workflow(title, context, maxBudgetUsd?, steps, cron)`** —
-run `run_pi_minion_workflow` on a cron schedule.
+**`schedule_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?, steps,
+cron)`** — run `run_pi_minion_workflow` on a cron schedule. It takes the same
+fields as `run_pi_minion_workflow`.
 
 - The graph, every step, and the cron are checked once up front; the confirm
   dialog (which adds the cron, next run, and per-run budget) is the only
@@ -154,8 +161,8 @@ run `run_pi_minion_workflow` on a cron schedule.
   that starts a turn immediately while the schedule keeps running; the run's
   summary posts without starting a turn unless the run ended the schedule or
   no step succeeded, in which case it starts one and says so.
-- Each step's budget cap is fixed when the schedule is approved, not re-read
-  from `pi-minion.json` on later runs.
+- Each step's budget cap and timeout are fixed when the schedule is approved,
+  not re-read from `pi-minion.json` on later runs.
 - The workflow must have exactly one final step (one no other step depends
   on); only that step is told it can end the schedule with `[[STOP_SCHEDULE]]`
   — its summary posts with a "Schedule stopped" note and starts a turn
@@ -250,7 +257,7 @@ You can then prompt pi like
 
 - Run a pi minion to explore this code base and summarize it
 - Run a sonnet pi minion to debug this ticket
-- Run an opus pi minion to review current changes at medium effort; budget $5
+- Run an opus pi minion to review current changes at medium effort; budget $5; timeout 10 minutes
 - Use a workflow: two sonnet agents review the current changes for bugs and performance, then an opencode-go/gpt-6-luna agent verifies their findings
 
 ## Configuration
@@ -262,8 +269,8 @@ You can then prompt pi like
 | `models`                  | no (`{ "allowed": [], "blocked": [] }`)                                                                 | Model-id filter: object with optional `allowed`/`blocked` string arrays; `help_pi_minion` hides a failing model and `validateRequest` rejects it. `blocked` wins over `allowed`; empty/absent `allowed` = no allowlist — every routable model passes. Entries are minimatch globs matched case-insensitively — exact ids, braces, `[char]` classes, `?`, `**`, and extglobs (`{a,b}`); `*` does not cross `/`; `!` negation is off (`!x` is treated as a literal) — so a pi pattern matches either the qualified `provider/id` ref or its bare id (`"gemini*"` matches every `gemini-<version>-flash-<effort>` id agy serves; `"opencode-go/*"` matches the qualified ref `opencode-go/gpt-6-luna`). Replaced wholesale by user override.                                                                                                                                                                                                                                                                                                                                                                    |
 | `providers`               | no (`{}`)                                                                                               | Provider-level filter over the same surface as `models.allowed`/`models.blocked`, evaluated per emitting adapter (each adapter checks against its own provider identity). `help_pi_minion` and `validateRequest` share the same gates, in order: providers first, then `models.blocked`, then `models.allowed` membership (a model must be both allowed and a string the adapter itself accepts). Object with optional `allowed`/`blocked` string arrays of provider names — `claude` (the claude adapter), `antigravity` (agy), or pi's catalog provider names (`opencode-go`, `openai-codex`, `amazon-bedrock`, …). `blocked` wins over `allowed`; entries use the same minimatch globs (case-insensitive), so a pi model is judged under its single provider and a provider block drops only that provider's refs; a model whose providers can't be identified is kept; a model string is hidden if **any** of its backing providers is blocked (or outside a non-empty allowlist) — pi resolves aliases itself, so a shared alias never exposes a blocked provider. Replaced wholesale by user override. |
 | `allowedTools`            | yes                                                                                                     | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `maxBudgetUsd`            | yes                                                                                                     | Default `--max-budget-usd`; the minion's cost ceiling. Overridable per call via the tool's `maxBudgetUsd` param.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `timeoutMs`               | yes                                                                                                     | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `maxBudgetUsd`            | yes                                                                                                     | Default `--max-budget-usd`; the minion's cost ceiling. This config value is the default when a call omits `maxBudgetUsd`; the tool param overrides it per run or step.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `timeoutMs`               | yes                                                                                                     | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long. This config value is the default when a call omits `timeoutMs`; the tool param overrides it per run or step.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `pruneAfterDays`          | no (7)                                                                                                  | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `maxOutputBytes`          | no (15MB)                                                                                               | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `maxResultPreviewBytes`   | no (50KB)                                                                                               | Caps how much of a clean-exit result the `pi-minion-display` entry shows, and how much of a dependency's result a workflow step inlines. Display entries are never sent to the model; the model-facing post is capped by `maxResultContextBytes`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

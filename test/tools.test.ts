@@ -199,6 +199,11 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     const { effort, ...withoutEffort } = baseArgs();
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutEffort), false);
   });
+
+  it("accepts a timeoutMs and rejects a non-number", () => {
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ timeoutMs: 300_000 })), true);
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ timeoutMs: "5m" })), false);
+  });
 });
 
 describe("PI_MINION_EXAMPLES", () => {
@@ -243,6 +248,14 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [] }), false);
     const { effort, ...stepWithoutEffort } = args.steps[0];
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [stepWithoutEffort] }), false);
+  });
+
+  it("accepts a step's own timeoutMs and a workflow-level one", () => {
+    assert.equal(
+      Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...args.steps[0], timeoutMs: 300_000 }] }),
+      true
+    );
+    assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, timeoutMs: 600_000 }), true);
   });
 });
 

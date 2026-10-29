@@ -10,8 +10,9 @@ plain exit code, not a Node-level signal, so this alone doesn't say *why*
 it was killed. Two known causes, both already fixed to report their actual
 reason instead of a bare exit code:
 
-- Genuine `timeoutMs` expiry — now reported as "timed out before
-  finishing," pointing at the job's `stdout.json` for partial output.
+- Genuine `timeoutMs` expiry — the limit comes from the call's `timeoutMs` or
+  from the config default when the call omits it — now reported as "timed out
+  before finishing," pointing at the job's `stdout.json` for partial output.
 - The extension's own `session_shutdown` handler used to kill every running
   job on *any* shutdown reason — but `/reload`, `/new`, resuming, or
   forking a session all fire `session_shutdown` too, not just quitting Pi.

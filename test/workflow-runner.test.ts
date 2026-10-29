@@ -10,7 +10,7 @@ import {
   type WorkflowDeps
 } from "../src/workflow-runner.js";
 import { schedules, STOP_SCHEDULE_INSTRUCTION, STOP_SCHEDULE_MARKER, type MinionSchedule } from "../src/schedule-store.js";
-import { MAX_PARALLEL_STEPS, withEffectiveBudgets, workflows, type MinionWorkflow } from "../src/workflow-store.js";
+import { MAX_PARALLEL_STEPS, withEffectiveLimits, workflows, type MinionWorkflow } from "../src/workflow-store.js";
 
 type Started = { request: MinionRequest; jobId: string; settle: (o: StepOutcome) => void };
 
@@ -193,6 +193,20 @@ describe("startWorkflow", () => {
     await h.flush();
     assert.equal(h.wf.steps[0].status, "failed");
     assert.equal(h.wf.steps[0].result, "Pi minion failed (exit 1).");
+  });
+
+  it("carries the step's timeoutMs, else the workflow's, else none", async () => {
+    const h = harness([{ id: "a" }, { id: "b" }]);
+    h.wf.timeoutMs = 900_000;
+    h.wf.steps[0]!.timeoutMs = 120_000;
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    assert.deepEqual(h.started.map((started) => started.request.timeoutMs), [120_000, 900_000]);
+
+    const plain = harness([{ id: "a" }]);
+    startWorkflow("wf", plain.deps);
+    await plain.flush();
+    assert.equal(plain.started[0]!.request.timeoutMs, undefined);
   });
 
   it("never runs more than MAX_PARALLEL_STEPS at once", async () => {
@@ -460,7 +474,7 @@ describe("scheduled workflows", () => {
       sessionId: "s1",
       maxResultPreviewBytes: 1000,
       // As tools.ts stores it: withEffectiveBudgets already pinned each step's cap.
-      def: withEffectiveBudgets(
+      def: withEffectiveLimits(
         {
           title: "T",
           context: "No prior context.",
@@ -470,7 +484,7 @@ describe("scheduled workflows", () => {
             { id: "b", task: "t", model: "sonnet", effort: "medium", maxBudgetUsd: 1 }
           ]
         },
-        { maxBudgetUsd: 99 }
+        { maxBudgetUsd: 99, timeoutMs: 600_000 }
       ),
       runs: 0,
       skipped: 0

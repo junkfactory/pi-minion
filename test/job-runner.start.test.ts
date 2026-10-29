@@ -54,6 +54,7 @@ process.env.HOME = home;
 process.env.PATH = `${bin}:${realPath}`;
 
 const { startJob, validateRequest } = await import("../src/job-runner.js");
+const { validateWorkflowSteps } = await import("../src/tools.js");
 const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, stopJob } = await import("../src/job-store.js");
 const { startWorkflowSession } = await import("../src/child-session.js");
 const { setAdaptersForTest } = await import("../src/adapters/registry.js");
@@ -171,6 +172,71 @@ describe("validateRequest providers gate", () => {
     } finally {
       setModelRegistry(undefined);
     }
+  });
+});
+
+describe("validateRequest timeoutMs", () => {
+  const config = {
+    models: { allowed: ["sonnet"], blocked: [] },
+    allowedTools: [],
+    maxBudgetUsd: 5,
+    timeoutMs: 900_000
+  };
+  const request = { task: "x", workspace, model: "sonnet", effort: "medium" };
+
+  it("rejects zero, a negative value, NaN and Node's setTimeout overflow", async () => {
+    for (const timeoutMs of [0, -1, Number.NaN, 2_147_483_648]) {
+      await assert.rejects(
+        validateRequest({ ...request, timeoutMs }, workspace, config),
+        /timeoutMs must be a positive number of milliseconds/
+      );
+    }
+  });
+
+  it("accepts a positive limit up to the setTimeout maximum", async () => {
+    await validateRequest({ ...request, timeoutMs: 250 }, workspace, config);
+    await validateRequest({ ...request, timeoutMs: 2_147_483_647 }, workspace, config);
+  });
+});
+
+describe("validateWorkflowSteps timeoutMs preflight", () => {
+  const config = permissive();
+  const step = (extra: object = {}) => [
+    { id: "a", task: "Do a thing", model: "sonnet", effort: "medium", ...extra }
+  ];
+
+  it("rejects a step or workflow limit that startJob would reject", async () => {
+    for (const timeoutMs of [0, -1, 2_147_483_648]) {
+      await assert.rejects(
+        validateWorkflowSteps(
+          { title: "T", context: "No prior context.", steps: step({ timeoutMs }) },
+          workspace,
+          config
+        ),
+        /Step "a": timeoutMs must be a positive number/
+      );
+      await assert.rejects(
+        validateWorkflowSteps(
+          { title: "T", context: "No prior context.", timeoutMs, steps: step() },
+          workspace,
+          config
+        ),
+        /Step "a": timeoutMs must be a positive number/
+      );
+    }
+  });
+
+  it("accepts valid step and workflow limits", async () => {
+    await validateWorkflowSteps(
+      { title: "T", context: "No prior context.", steps: step({ timeoutMs: 120_000 }) },
+      workspace,
+      config
+    );
+    await validateWorkflowSteps(
+      { title: "T", context: "No prior context.", timeoutMs: 900_000, steps: step() },
+      workspace,
+      config
+    );
   });
 });
 
@@ -426,6 +492,21 @@ describe("startJob", () => {
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0].ok, false);
     assert.equal(jobMeta.get(id)?.status, "cancelled");
+  });
+
+  it("a run that outlives its timeoutMs settles not-ok and marks the job errored", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const id = await startJob(
+      { ...request("slow"), timeoutMs: 200 }, workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › slow-timeout", id: "slow-timeout", workflowId: "wf" }
+    );
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, false);
+    assert.match(outcomes[0].errorReason ?? "", /timed out before finishing/);
+    assert.equal(jobMeta.get(id)?.status, "errored");
   });
 
   it("isCancelled rejects before spawning and marks the job cancelled", async () => {

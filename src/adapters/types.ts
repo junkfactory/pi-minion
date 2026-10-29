@@ -54,6 +54,9 @@ export type MinionRequest = {
   effort: string;
   context?: string;
   maxBudgetUsd?: number;
+  // Wall-clock limit for this run in milliseconds. Overrides config.timeoutMs
+  // when set; validateRequest() rejects 0, negative, and non-finite values.
+  timeoutMs?: number;
 };
 
 export type ModelBreakdown = {

@@ -220,16 +220,17 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: 22461,
       totalCostUsd: 0.0221861,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
   it("adds a step line after job_id only for workflow steps", () => {
-    const base = { jobId: "j1", agent: "claude", model: "haiku", maxBudgetUsd: 5, jobDir: "/tmp/j" };
+    const base = { jobId: "j1", agent: "claude", model: "haiku", maxBudgetUsd: 5, timeoutMs: 900000, jobDir: "/tmp/j" };
     assert.ok(!formatJobFrontmatter(base).includes("step:"));
     assert.match(formatJobFrontmatter({ ...base, step: "Review MR › bugs" }), /job_id: j1\nstep: Review MR › bugs\ntoken_usage/);
   });
@@ -245,11 +246,12 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: undefined,
       totalCostUsd: undefined,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑n/a ↓n/a →n/a ←n/a\ncost_usd: n/a\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑n/a ↓n/a →n/a ←n/a\ncost_usd: n/a\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -265,11 +267,12 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: 22461,
       totalCostUsd: 0.0221861,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku (medium)\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku (medium)\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -285,6 +288,7 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: 22461,
       totalCostUsd: 0.0221861,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.ok(frontmatter.startsWith("# Pi Minion: claude\n---\nmodel: haiku\n"));
@@ -305,11 +309,12 @@ describe("formatJobFrontmatter", () => {
         { model: "claude-haiku-4-5-20251001", costUsd: 0.9, inputTokens: 1000, outputTokens: 6000, cacheWriteTokens: 10000, cacheReadTokens: 20000 }
       ],
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑1.0K ↓9.0K →17.0K ←20.0K (claude-haiku-4-5-20251001 ↑1.0K ↓6.0K →10.0K ←20.0K + claude-sonnet-5 ↑0.1K ↓0.9K →2.0K ←7.0K)\ncost_usd: \\$1.2000 (claude-haiku-4-5-20251001 \\$0.9000 + claude-sonnet-5 \\$0.3000)\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑1.0K ↓9.0K →17.0K ←20.0K (claude-haiku-4-5-20251001 ↑1.0K ↓6.0K →10.0K ←20.0K + claude-sonnet-5 ↑0.1K ↓0.9K →2.0K ←7.0K)\ncost_usd: \\$1.2000 (claude-haiku-4-5-20251001 \\$0.9000 + claude-sonnet-5 \\$0.3000)\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -327,11 +332,12 @@ describe("formatJobFrontmatter", () => {
         { model: "claude-haiku-4-5-20251001", costUsd: 0.0221861, inputTokens: 10, outputTokens: 39, cacheWriteTokens: 9140, cacheReadTokens: 22461 }
       ],
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -346,12 +352,13 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: 22461,
       totalCostUsd: 0.0221861,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc",
       reportPath: "/tmp/job/abc/result.md"
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\noutput_path: /tmp/job/abc\nreport: [result.md](file:///tmp/job/abc/result.md)\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\nreport: [result.md](file:///tmp/job/abc/result.md)\n\n---"
     );
   });
 
@@ -366,6 +373,7 @@ describe("formatJobFrontmatter", () => {
       cacheReadTokens: undefined,
       totalCostUsd: undefined,
       maxBudgetUsd: 5,
+      timeoutMs: 900000,
       jobDir: "/tmp/job/abc"
     });
     assert.ok(!frontmatter.includes("report:"));
