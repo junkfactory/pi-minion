@@ -157,8 +157,13 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     getSchemaPath(),
   ];
 
-  const images = extractImages(request.context);
-  const taskType = detectTaskType(request.context, images);
+  // Image markers may sit in the task or the context — fm receives both
+  // concatenated as one prompt (resolveTaskText), so scan exactly what fm
+  // reads. Scanning only the context silently dropped markers placed in the
+  // task: no --image/--tool were emitted and fm answered off prompt text alone.
+  const prompt = resolveTaskText(request);
+  const images = extractImages(prompt);
+  const taskType = detectTaskType(prompt, images);
   if (taskType !== "general") {
     // --label is only valid alongside --tool (fm rejects it otherwise), so
     // the tool flag is what enables labels below.

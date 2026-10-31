@@ -172,6 +172,26 @@ describe("buildArgs", () => {
     assert.ok(args.includes("--schema"));
   });
 
+  it("scans the task, not just the context, for image markers", () => {
+    // Markers commonly land in the task field; dropping them used to spell
+    // fm no --image/--tool at all.
+    const args = buildArgs(
+      fakeRequest({ task: "[image:/tmp/code.png:barcode] decode it" }),
+      fakeConfig()
+    );
+    assert.equal(flagValue(args, "--tool"), "barcode");
+    assert.deepEqual(flagValues(args, "--image"), ["/tmp/code.png"]);
+  });
+
+  it("scans the full prompt when the marker is in the task and only evidence in the context", () => {
+    const args = buildArgs(
+      fakeRequest({ task: "[image:/tmp/code.png:barcode] decode it", context: "no markers here" }),
+      fakeConfig()
+    );
+    assert.equal(flagValue(args, "--tool"), "barcode");
+    assert.deepEqual(flagValues(args, "--image"), ["/tmp/code.png"]);
+  });
+
   it("handles a barcode task via an explicit [barcode:] marker", () => {
     const args = buildArgs(
       fakeRequest({ context: "[barcode:/tmp/code.png] [image:/tmp/code.png]" }),
