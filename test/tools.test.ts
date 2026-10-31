@@ -217,6 +217,10 @@ describe("buildUsageNotes", () => {
   it("returns just shared + user notes when no adapters are registered", () => {
     assert.deepEqual(buildUsageNotes([], { usageNotes: ["x"] }), [...PI_MINION_USAGE_NOTES, "x"]);
   });
+
+  it("pins the config.usageNotes fallback when the key is absent", () => {
+    assert.deepEqual(buildUsageNotes([fmOf()], {}), [...PI_MINION_USAGE_NOTES, ...FM_USAGE_NOTES]);
+  });
 });
 
 describe("RUN_PI_MINION_PARAMETERS", () => {

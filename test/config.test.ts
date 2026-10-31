@@ -255,9 +255,9 @@ describe("usageNotes config", () => {
     }
   }
 
-  it("leaves usageNotes undefined on the repo default config", async () => {
+  it("defaults the repo config's usageNotes to an empty list", async () => {
     const config = await loadConfig(join(tmpdir(), "pi-minion-test-no-override.json"));
-    assert.equal(config.usageNotes, undefined);
+    assert.deepEqual(config.usageNotes, []);
   });
 
   it("merges a usageNotes override without touching other top-level keys", () => {

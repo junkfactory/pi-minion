@@ -25,5 +25,6 @@
     "claude": { "args": [], "preExec": [] },
     "agy": { "args": [], "preExec": [] },
     "fm": { "args": [], "preExec": [] }
-  }
+  },
+  "usageNotes": []
 }
