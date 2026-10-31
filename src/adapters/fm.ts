@@ -34,8 +34,9 @@ export const DEFAULT_SCHEMA = {
 // help_pi_minion lines advertising what fm can do beyond plain text. Worded
 // agent-facing: no "adapter" anywhere; the fm family is named by its model ids.
 export const FM_USAGE_NOTES = [
+  "use only for very basic tasks like generating slugs, titles, reading barcode and ocr",
   "fm (fm:system) is one-shot with no agent tools — the task must be self-contained; there is no cost reporting and effort is ignored.",
-  "fm image tasks: name images anywhere in the context with [image:<path>][:<label>]; append :ocr or :barcode (or write [ocr:…] / [barcode:…]) to enable that tool."
+  "fm read-only image tasks: name images anywhere in the context with [image:<path>][:<label>]; append :ocr or :barcode (or write [ocr:…] / [barcode:…]) to enable that tool."
 ];
 
 // Bundled, read-only path: resolved relative to this module, so the extension
@@ -51,7 +52,9 @@ function canonicalJson(value: unknown): string {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
   if (value && typeof value === "object") {
-    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
   }
   return JSON.stringify(value);
@@ -136,14 +139,24 @@ export function detectTaskType(
   images: ExtractedImage[]
 ): FmTaskType | "general" {
   if (!context) return "general";
-  if (/\[ocr:/i.test(context) || images.some((image) => image.taskType === "ocr")) return "ocr";
-  if (/\[barcode:/i.test(context) || images.some((image) => image.taskType === "barcode")) {
+  if (
+    /\[ocr:/i.test(context) ||
+    images.some((image) => image.taskType === "ocr")
+  )
+    return "ocr";
+  if (
+    /\[barcode:/i.test(context) ||
+    images.some((image) => image.taskType === "barcode")
+  ) {
     return "barcode";
   }
   return "general";
 }
 
-export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
+export function buildArgs(
+  request: MinionRequest,
+  config: MinionConfig
+): string[] {
   const args = [
     "respond",
     "--no-stream",
@@ -154,7 +167,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     // Structured output: fm prints {"result": "..."} instead of prose, which
     // is what makes parseLine able to emit a result event at all.
     "--schema",
-    getSchemaPath(),
+    getSchemaPath()
   ];
 
   // Image markers may sit in the task or the context — fm receives both
@@ -172,7 +185,8 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
 
   for (const image of images) {
     args.push("--image", image.path);
-    if (image.label && taskType !== "general") args.push("--label", image.label);
+    if (image.label && taskType !== "general")
+      args.push("--label", image.label);
   }
 
   args.push(...(config.adapterArgs?.fm?.args ?? []));
@@ -184,7 +198,9 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
 export function environment(): NodeJS.ProcessEnv {
   const names = ["HOME", "PATH", "USER", "LANG", "TERM"];
   return Object.fromEntries(
-    names.flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : []))
+    names.flatMap((name) =>
+      process.env[name] ? [[name, process.env[name]]] : []
+    )
   );
 }
 
@@ -229,7 +245,9 @@ export async function refreshCatalog(): Promise<void> {
   const execFileAsync = promisify(execFile);
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync("fm", ["models"], { timeout: FM_PROBE_TIMEOUT_MS }));
+    ({ stdout } = await execFileAsync("fm", ["models"], {
+      timeout: FM_PROBE_TIMEOUT_MS
+    }));
   } catch (error) {
     const failure = error as { code?: unknown; stdout?: unknown } | null;
     if (failure?.code === "ENOENT") return;
@@ -250,7 +268,10 @@ const capabilities: AdapterCapabilities = {
   supportsMaxBudgetUsd: false
 };
 
-export function describeUnsupported(request: MinionRequest, _config: MinionConfig): string[] {
+export function describeUnsupported(
+  request: MinionRequest,
+  _config: MinionConfig
+): string[] {
   const warnings = [
     "fm has no agent tools — it answers in one shot with no file, shell, or web access, so the task must be self-contained.",
     "No cost ceiling or reporting — fm runs on-device (or on Private Cloud Compute), maxBudgetUsd is unenforced and cost_usd will read n/a.",
@@ -269,19 +290,28 @@ export function createFmAdapter(config: MinionConfig): AgentCliAdapter {
   // (unidentifiable), otherwise every provider must pass isProviderAllowed.
   const providerGate = (model: string) => {
     const providers = providersOf(model);
-    return providers.length === 0 || providers.every((p) => isProviderAllowed(config, p));
+    return (
+      providers.length === 0 ||
+      providers.every((p) => isProviderAllowed(config, p))
+    );
   };
   return {
     name: "fm",
     command: "fm",
-    description: "Apple Foundation Models CLI adapter for simple task delegation",
-    installHint: "Install macOS 27.x or later (fm ships with the OS at /usr/bin/fm)",
+    description:
+      "Apple Foundation Models CLI adapter for simple task delegation",
+    installHint:
+      "Install macOS 27.x or later (fm ships with the OS at /usr/bin/fm)",
     rawOutputHint: "fm respond outputs plain text or JSON with --schema",
     permissionDeniedWarning:
       "fm requires access to Apple Foundation Models. Ensure you're running on macOS 27.x+ with fm available at /usr/bin/fm.",
     capabilities,
     ownsModel(model) {
-      return rawOwnsModel(model) && providerGate(model) && isModelAllowed(config, model);
+      return (
+        rawOwnsModel(model) &&
+        providerGate(model) &&
+        isModelAllowed(config, model)
+      );
     },
     rawOwnsModel,
     availableModels() {
