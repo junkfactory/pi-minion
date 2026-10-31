@@ -395,6 +395,9 @@ export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
     buildArgs,
     environment,
     parseLine,
-    describeUnsupported
+    describeUnsupported,
+    usageNotes() {
+      return [];
+    }
   };
 }

@@ -240,6 +240,76 @@ describe("loadConfig", () => {
   });
 });
 
+describe("usageNotes config", () => {
+  // Writes a one-shot user-override file, points loadConfig at it, and
+  // removes the temp dir before returning — same pattern as the loadConfig
+  // merge tests above.
+  async function loadWith(overrideText: string): Promise<MinionConfig> {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, overrideText, "utf8");
+      return await loadConfig(overridePath);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  }
+
+  it("leaves usageNotes undefined on the repo default config", async () => {
+    const config = await loadConfig(join(tmpdir(), "pi-minion-test-no-override.json"));
+    assert.equal(config.usageNotes, undefined);
+  });
+
+  it("merges a usageNotes override without touching other top-level keys", () => {
+    const base = fakeConfig({
+      usageNotes: ["old"],
+      adapterArgs: { pi: { args: ["--flag"], preExec: ["env", "-u", "AWS_PROFILE"] } }
+    });
+    const merged = applyConfigOverride(base, JSON.stringify({ usageNotes: ["a", "b"] }));
+    assert.deepEqual(merged.usageNotes, ["a", "b"]);
+    // args/preExec survive the merge intact: only the top-level key is replaced.
+    assert.deepEqual(merged.adapterArgs, base.adapterArgs);
+    assert.deepEqual(base.usageNotes, ["old"]); // base not mutated
+  });
+
+  it("passes a valid usageNotes array through the loadConfig merge", async () => {
+    const config = await loadWith(JSON.stringify({ usageNotes: ["a", "b"] }));
+    assert.deepEqual(config.usageNotes, ["a", "b"]);
+  });
+
+  it("replaces usageNotes wholesale rather than concatenating", () => {
+    const base = fakeConfig({ usageNotes: ["old note"] });
+    const merged = applyConfigOverride(
+      base,
+      JSON.stringify({ usageNotes: ["fresh"], models: { allowed: ["haiku"], blocked: [] } })
+    );
+    assert.deepEqual(merged.usageNotes, ["fresh"]);
+    assert.deepEqual(merged.models, { allowed: ["haiku"], blocked: [] });
+  });
+
+  it("throws when usageNotes is not an array", async () => {
+    await assert.rejects(
+      loadWith(JSON.stringify({ usageNotes: "a string" })),
+      /Invalid pi-minion configuration/
+    );
+    await assert.rejects(
+      loadWith(JSON.stringify({ usageNotes: { a: 1 } })),
+      /Invalid pi-minion configuration/
+    );
+  });
+
+  it("throws when a usageNotes entry is not a string", async () => {
+    await assert.rejects(
+      loadWith(JSON.stringify({ usageNotes: ["ok", 1] })),
+      /Invalid pi-minion configuration/
+    );
+    await assert.rejects(
+      loadWith(JSON.stringify({ usageNotes: [["nested"]] })),
+      /Invalid pi-minion configuration/
+    );
+  });
+});
+
 describe("isModelAllowed / isModelBlocked", () => {
   it("treats an empty models.blocked as nothing blocked", () => {
     const config = fakeConfig({ models: { allowed: ["sonnet"], blocked: [] } });

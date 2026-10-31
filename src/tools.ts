@@ -338,6 +338,21 @@ export function buildHelpModelList(adapters: AgentCliAdapter[]): string[] {
   return [...new Set(adapters.flatMap((adapter) => adapter.availableModels()))];
 }
 
+// help_pi_minion's usage notes: shared constants, then every REGISTERED
+// adapter's capability lines in registry claim order (claude → agy → pi → fm)
+// — an unregistered adapter contributes nothing — then the user's own
+// `usageNotes` config entries last, so user notes read as later corrections.
+export function buildUsageNotes(
+  adapters: AgentCliAdapter[],
+  config: Pick<MinionConfig, "usageNotes">
+): string[] {
+  return [
+    ...PI_MINION_USAGE_NOTES,
+    ...adapters.flatMap((adapter) => adapter.usageNotes()),
+    ...(config.usageNotes ?? [])
+  ];
+}
+
 function textResult<T>(text: string, details: T) {
   return { content: [{ type: "text" as const, text }], details };
 }
@@ -830,7 +845,7 @@ export function registerTools(pi: ExtensionAPI): void {
       const payload = {
         models: buildHelpModelList(listAdapters()),
         examples: PI_MINION_EXAMPLES,
-        usageNotes: PI_MINION_USAGE_NOTES,
+        usageNotes: buildUsageNotes(listAdapters(), config),
         defaults: {
           timeoutMs: config.timeoutMs,
           maxBudgetUsd: config.maxBudgetUsd

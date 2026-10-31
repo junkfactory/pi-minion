@@ -72,7 +72,8 @@ export function createFakeAdapter(config: MinionConfig): AgentCliAdapter {
     buildArgs: (request) => ["--model", request.model, "--", request.task],
     environment: () => ({}),
     parseLine: () => [],
-    describeUnsupported: () => []
+    describeUnsupported: () => [],
+    usageNotes: () => []
   };
 }
 

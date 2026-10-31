@@ -110,7 +110,8 @@ const unresolvableAdapter: AgentCliAdapter = {
   buildArgs: () => [],
   environment: () => ({}),
   parseLine: () => [],
-  describeUnsupported: () => []
+  describeUnsupported: () => [],
+  usageNotes: () => []
 };
 
 export function resolveAdapterForJob(model: string): AgentCliAdapter {

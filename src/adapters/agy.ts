@@ -377,6 +377,9 @@ export function createAgyAdapter(config: MinionConfig): AgentCliAdapter {
     buildArgs,
     environment,
     parseLine,
-    describeUnsupported
+    describeUnsupported,
+    usageNotes() {
+      return [];
+    }
   };
 }

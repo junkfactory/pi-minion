@@ -7,10 +7,13 @@ import { Check } from "typebox/value";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
 import { createPiAdapter, setModelRegistry } from "../src/adapters/pi.js";
+import { createFmAdapter, FM_USAGE_NOTES } from "../src/adapters/fm.js";
 import { fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
   buildHelpModelList,
+  buildUsageNotes,
   PI_MINION_EXAMPLES,
+  PI_MINION_USAGE_NOTES,
   RUN_PI_MINION_PARAMETERS,
   RUN_PI_MINION_WORKFLOW_PARAMETERS,
   SCHEDULE_PI_MINION_PARAMETERS,
@@ -171,6 +174,48 @@ describe("buildHelpModelList", () => {
     } finally {
       setModelRegistry(undefined);
     }
+  });
+});
+
+describe("buildUsageNotes", () => {
+  // Real factories, permissive config — production-faithful notes; only fm
+  // has non-empty lines today (claude/agy/pi return []).
+  const permissive = () => fakeConfig({ models: { allowed: [], blocked: [] } });
+  const claudeOf = (config = permissive()) => createClaudeAdapter(config);
+  const agyOf = (config = permissive()) => createAgyAdapter(config);
+  const piOf = (config = permissive()) => createPiAdapter(config);
+  const fmOf = (config = permissive()) => createFmAdapter(config);
+
+  it("orders shared notes first, adapter notes after, user notes last", () => {
+    const notes = buildUsageNotes([claudeOf(), agyOf(), piOf(), fmOf()], { usageNotes: ["user note"] });
+    assert.deepEqual(notes.slice(0, PI_MINION_USAGE_NOTES.length), PI_MINION_USAGE_NOTES);
+    const fmStart = notes.indexOf(FM_USAGE_NOTES[0]);
+    assert.ok(fmStart !== -1, "fm lines missing");
+    assert.ok(fmStart >= PI_MINION_USAGE_NOTES.length, "adapter lines intrude on the shared block");
+    assert.equal(notes[fmStart + 1], FM_USAGE_NOTES[1]);
+    assert.equal(notes.at(-1), "user note");
+  });
+
+  it("omits an unregistered adapter's lines entirely", () => {
+    const notes = buildUsageNotes([claudeOf(), agyOf(), piOf()], { usageNotes: [] });
+    assert.equal(notes.indexOf(FM_USAGE_NOTES[0]), -1);
+  });
+
+  it("contributes nothing from adapters whose usageNotes are all empty", () => {
+    // Substantiate the precondition: only fm emits built-in adapter lines.
+    assert.deepEqual(
+      [claudeOf(), agyOf(), piOf()].flatMap((adapter) => adapter.usageNotes()),
+      []
+    );
+    const configNotes = ["a", "b"];
+    assert.deepEqual(
+      buildUsageNotes([claudeOf(), agyOf(), piOf()], { usageNotes: configNotes }),
+      [...PI_MINION_USAGE_NOTES, ...configNotes]
+    );
+  });
+
+  it("returns just shared + user notes when no adapters are registered", () => {
+    assert.deepEqual(buildUsageNotes([], { usageNotes: ["x"] }), [...PI_MINION_USAGE_NOTES, "x"]);
   });
 });
 

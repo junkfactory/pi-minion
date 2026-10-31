@@ -9,6 +9,7 @@ import {
   createFmAdapter,
   DEFAULT_SCHEMA,
   describeUnsupported,
+  FM_USAGE_NOTES,
   getSchemaPath,
   parseLine,
   rawOwnsModel,
@@ -440,5 +441,27 @@ describe("refreshCatalog", () => {
     } finally {
       process.env.PATH = realPath;
     }
+  });
+});
+
+describe("usageNotes", () => {
+  it("returns the two fm capability lines from the bound adapter", () => {
+    const notes = createFmAdapter(fakeConfig()).usageNotes();
+    assert.equal(notes.length, 2);
+    assert.match(notes[0], /one-shot/);
+    assert.match(notes[0], /no agent tools/);
+    assert.match(notes[1], /\[image:/);
+    assert.match(notes[1], /:ocr/);
+    assert.match(notes[1], /:barcode/);
+  });
+
+  it("keeps the notes agent-facing: no internal \"adapter\" wording, stable across calls", () => {
+    const fm = createFmAdapter(fakeConfig());
+    for (const note of fm.usageNotes()) {
+      assert.ok(!/\badapter\b/i.test(note), `leaks internal wording: ${note}`);
+    }
+    // The lines are the module constant; a fresh call must read identically.
+    assert.deepEqual(fm.usageNotes(), FM_USAGE_NOTES);
+    assert.deepEqual(fm.usageNotes(), fm.usageNotes());
   });
 });

@@ -31,6 +31,13 @@ export const DEFAULT_SCHEMA = {
   required: ["result"]
 };
 
+// help_pi_minion lines advertising what fm can do beyond plain text. Worded
+// agent-facing: no "adapter" anywhere; the fm family is named by its model ids.
+export const FM_USAGE_NOTES = [
+  "fm (fm:system) is one-shot with no agent tools — the task must be self-contained; there is no cost reporting and effort is ignored.",
+  "fm image tasks: name images anywhere in the context with [image:<path>][:<label>]; append :ocr or :barcode (or write [ocr:…] / [barcode:…]) to enable that tool."
+];
+
 // Bundled, read-only path: resolved relative to this module, so the extension
 // install layout carries the schema (no runtime writes, nothing to sweep from
 // /tmp, no write race). Content-validated on each call: a tampered or drifted
@@ -286,6 +293,9 @@ export function createFmAdapter(config: MinionConfig): AgentCliAdapter {
     environment,
     parseLine,
     describeUnsupported,
+    usageNotes() {
+      return FM_USAGE_NOTES;
+    },
     refreshCatalog
   };
 }

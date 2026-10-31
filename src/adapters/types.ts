@@ -42,6 +42,11 @@ export type MinionConfig = {
   shortcut?: string;
   showGlyphs?: boolean;
   adapterArgs?: Record<string, AdapterArgs>;
+  // User-authored usage notes appended last into help_pi_minion's usage
+  // notes; each entry renders as one line. Replaced wholesale by the user
+  // override (same as every top-level config key; see applyConfigOverride
+  // in config.ts).
+  usageNotes?: string[];
 };
 
 export type MinionRequest = {
@@ -177,4 +182,10 @@ export interface AgentCliAdapter {
   // honor (e.g. an effort value it has no flag for). [] when nothing needs
   // flagging.
   describeUnsupported(request: MinionRequest, config: MinionConfig): string[];
+  // Statically known capability notes for this adapter, appended into
+  // help_pi_minion's usageNotes (request-free — unlike describeUnsupported,
+  // this is always surfaced, not only on a run). [] when the adapter has no
+  // special capabilities to advertise. Pipelines through the registry: an
+  // unregistered adapter contributes nothing.
+  usageNotes(): string[];
 }

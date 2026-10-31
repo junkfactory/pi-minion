@@ -69,7 +69,8 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     !Array.isArray(config.allowedTools) ||
     (config.models !== undefined && !isAllowDenyShape(config.models)) ||
     (config.providers !== undefined && !isAllowDenyShape(config.providers)) ||
-    (config.adapterArgs !== undefined && adapterArgs === undefined)
+    (config.adapterArgs !== undefined && adapterArgs === undefined) ||
+    (config.usageNotes !== undefined && !isStrings(config.usageNotes))
   ) {
     throw new Error(
       overrideText !== undefined
@@ -121,13 +122,14 @@ function isAllowDenyShape(value: unknown): boolean {
   return strings(allowed) && strings(blocked);
 }
 
+const isStrings = (v: unknown) => Array.isArray(v) && v.every((i) => typeof i === "string");
+
 // Returns the normalized map, or undefined if any entry is invalid
 // (neither a string[] nor an object with optional string[] args/preExec).
 function normalizeAdapterArgs(value: unknown): Record<string, AdapterArgs> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const out: Record<string, AdapterArgs> = {};
   for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
-    const isStrings = (v: unknown) => Array.isArray(v) && v.every((i) => typeof i === "string");
     if (isStrings(entry)) {
       out[name] = { args: [...entry as string[]], preExec: [] };
     } else if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
