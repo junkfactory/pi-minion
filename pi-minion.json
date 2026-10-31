@@ -23,6 +23,7 @@
   "adapterArgs": {
     "pi": { "args": ["-e", "builtin:mcp", "-e", "builtin:codemode"], "preExec": [] },
     "claude": { "args": [], "preExec": [] },
-    "agy": { "args": [], "preExec": [] }
+    "agy": { "args": [], "preExec": [] },
+    "fm": { "args": [], "preExec": [] }
   }
 }

@@ -84,7 +84,7 @@ export const PI_MINION_EXAMPLES = [
 export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result.",
   "effort is required — pick the level that fits the task (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd; timeoutMs is optional and overrides the config default (help_pi_minion prints that default under `defaults`).",
-  "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude and agy entries are bare ids.",
+  "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude, agy, and fm entries are bare ids.",
   'If the user names a model vaguely or ambiguously (a brand like "gemini", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don\'t guess.',
   "schedule_pi_minion takes the same fields plus a cron expression and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going.",
   "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn) after the user confirms in a dialog; a step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; a step that fails while the run continues posts one alert that starts a turn immediately, and one summary at the end starts a turn of its own with each step's TLDR inlined — open a reportPath only for the step whose TLDR isn't enough, never every report; track it with list_pi_minion_workflows and cancel_pi_minion_workflow.",
@@ -97,7 +97,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   }),
   model: Type.String({
     description:
-      "A model usable on this machine; call help_pi_minion to list them. pi models use the provider-qualified `provider/id` form (e.g. `opencode-go/gpt-6-luna`); claude and agy models are bare ids."
+      "A model usable on this machine; call help_pi_minion to list them. pi models use the provider-qualified `provider/id` form (e.g. `opencode-go/gpt-6-luna`); claude, agy, and fm models are bare ids."
   }),
   effort: Type.String({
     description:

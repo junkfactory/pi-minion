@@ -2,6 +2,7 @@ import type { AgentCliAdapter, MinionConfig } from "./types.js";
 import { createClaudeAdapter } from "./claude.js";
 import { createAgyAdapter } from "./agy.js";
 import { createPiAdapter } from "./pi.js";
+import { createFmAdapter } from "./fm.js";
 import { isProviderAllowed } from "../config.js";
 import { commandExists } from "./util.js";
 
@@ -14,7 +15,8 @@ const BLUEPRINTS: {
 }[] = [
   { command: "claude", create: createClaudeAdapter },
   { command: "agy", create: createAgyAdapter },
-  { command: "pi", create: createPiAdapter }
+  { command: "pi", create: createPiAdapter },
+  { command: "fm", create: createFmAdapter }
 ];
 
 // Registration = presence in this map; an unregistered adapter owns nothing
