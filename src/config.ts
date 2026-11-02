@@ -70,7 +70,9 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     (config.models !== undefined && !isAllowDenyShape(config.models)) ||
     (config.providers !== undefined && !isAllowDenyShape(config.providers)) ||
     (config.adapterArgs !== undefined && adapterArgs === undefined) ||
-    (config.usageNotes !== undefined && !isStrings(config.usageNotes))
+    (config.usageNotes !== undefined && !isStrings(config.usageNotes)) ||
+    (config.routingTable !== undefined && !isRoutingTableShape(config.routingTable)) ||
+    (config.costGate !== undefined && !isStrings(config.costGate))
   ) {
     throw new Error(
       overrideText !== undefined
@@ -123,6 +125,21 @@ function isAllowDenyShape(value: unknown): boolean {
 }
 
 const isStrings = (v: unknown) => Array.isArray(v) && v.every((i) => typeof i === "string");
+
+// Validates the routingTable map shape without normalizing: each value must
+// be an object with `first` and `fallback` string fields. Policy-only — the
+// entries are rendered verbatim into run_pi_minion's prompt guidelines.
+function isRoutingTableShape(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (entry) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      typeof (entry as { first?: unknown }).first === "string" &&
+      typeof (entry as { fallback?: unknown }).fallback === "string"
+  );
+}
 
 // Returns the normalized map, or undefined if any entry is invalid
 // (neither a string[] nor an object with optional string[] args/preExec).
@@ -196,4 +213,42 @@ export function readShortcutConfigSync(
   }
   const overrideText = existsSync(overridePath) ? readFileSync(overridePath, "utf8") : undefined;
   return applyConfigOverride(base, overrideText, overridePath);
+}
+
+// Synchronous read of the prompt-policy fields (routingTable + costGate),
+// mirroring readShortcutConfigSync. Reads the bundled pi-minion.json (which
+// already carries the defaults) plus the user override, applies the normal
+// wholesale applyConfigOverride merge, then does an additive per-key deep
+// merge for routingTable specifically — a user entry replaces or adds a
+// responsibility without dropping the bundled defaults, and a partial
+// { first, fallback } deep-merges over its default. costGate stays wholesale
+// (same as every other top-level key).
+export function readPromptConfigSync(overridePath: string = USER_CONFIG_PATH): {
+  routingTable: Record<string, { first: string; fallback: string }>;
+  costGate: string[];
+} {
+  let base: {
+    routingTable?: Record<string, { first: string; fallback: string }>;
+    costGate?: string[];
+  } = {};
+  try {
+    base = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  } catch {
+    base = {};
+  }
+  const overrideText = existsSync(overridePath) ? readFileSync(overridePath, "utf8") : undefined;
+  const merged = applyConfigOverride(base, overrideText, overridePath);
+
+  // Additive merge for routingTable
+  const baseTable = base.routingTable ?? {};
+  const overrideTable = merged.routingTable ?? {};
+  const routingTable = { ...baseTable };
+  for (const [k, v] of Object.entries(overrideTable)) {
+    routingTable[k] = { ...(baseTable[k] ?? {}), ...v };
+  }
+
+  return {
+    routingTable,
+    costGate: merged.costGate ?? base.costGate ?? []
+  };
 }

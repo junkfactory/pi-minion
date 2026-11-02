@@ -26,5 +26,19 @@
     "agy": { "args": [], "preExec": [] },
     "fm": { "args": [], "preExec": [] }
   },
-  "usageNotes": []
+  "usageNotes": [],
+  "routingTable": {
+    "Explore": { "first": "longcat/medium", "fallback": "glm-flash/low" },
+    "Focused / Simple Edits": { "first": "mimo-flash/low", "fallback": "deepseek-flash/low" },
+    "Research": { "first": "glm-flash/medium", "fallback": "longcat/medium" },
+    "Complex Implementation": { "first": "deepseek-flash/high", "fallback": "haiku/high" },
+    "Debug": { "first": "kimi-code/high", "fallback": "qwen-flash/high" },
+    "Initial Review": { "first": "qwen-flash/medium", "fallback": "gpt-luna/medium" },
+    "Routine / Re-review": { "first": "mimo-flash/low", "fallback": "haiku/low" },
+    "Design": { "first": "gpt-luna/high", "fallback": "mimo-pro/high" },
+    "Quick Fix": { "first": "deepseek-flash/low", "fallback": "minimax-flash/low" },
+    "Verify": { "first": "haiku/medium", "fallback": "gpt-luna/medium" },
+    "Exceptionally Complex Design/Impl": { "first": "deepseek-pro/max", "fallback": "gpt-luna/max" }
+  },
+  "costGate": ["kimi-*", "gemini-*", "glm", "glm-pro", "qwen-max", "grok", "*-pro", "*-max"]
 }

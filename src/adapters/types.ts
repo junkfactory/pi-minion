@@ -47,6 +47,16 @@ export type MinionConfig = {
   // override (same as every top-level config key; see applyConfigOverride
   // in config.ts).
   usageNotes?: string[];
+  // Model-selection routing table: task-responsibility label ->
+  // { first, fallback } model family patterns. Merged additively with the
+  // bundled defaults (per-key deep merge) — see readPromptConfigSync in
+  // config.ts. Purely policy: rendered into run_pi_minion's prompt
+  // guidelines, not validated beyond shape.
+  routingTable?: Record<string, { first: string; fallback: string }>;
+  // Cost gate: model-family globs that require user approval before a
+  // minion launches with a matching model, unless the user names the model
+  // explicitly. Wholesale override (same as every other top-level key).
+  costGate?: string[];
 };
 
 export type MinionRequest = {

@@ -429,24 +429,21 @@ describe("registerTools prompt footprint", () => {
     );
   });
 
-  it("defers the 6 lifecycle tools and keeps the 5 core tools direct", () => {
+  it("defers all 11 tools", () => {
     const deferred = [
+      "cancel_pi_minion",
       "cancel_pi_minion_schedule",
       "cancel_pi_minion_workflow",
+      "help_pi_minion",
       "list_pi_minion_schedules",
       "list_pi_minion_workflows",
+      "list_pi_minions",
+      "run_pi_minion",
+      "run_pi_minion_workflow",
       "schedule_pi_minion",
       "schedule_pi_minion_workflow"
     ];
-    const direct = [
-      "cancel_pi_minion",
-      "help_pi_minion",
-      "list_pi_minions",
-      "run_pi_minion",
-      "run_pi_minion_workflow"
-    ];
     for (const name of deferred) assert.equal(exposure(name), "deferred", name);
-    for (const name of direct) assert.equal(exposure(name), "direct", name);
   });
 
   it("keeps every tool description within 300 characters", () => {
@@ -458,12 +455,12 @@ describe("registerTools prompt footprint", () => {
     }
   });
 
-  it("limits every tool to 2 promptGuidelines bullets", () => {
+  it("allows promptGuidelines up to 15 bullets", () => {
     for (const def of registered) {
       const guidelines = def.promptGuidelines ?? [];
       assert.ok(
-        guidelines.length <= 2,
-        `${def.name} has ${guidelines.length} promptGuidelines bullets (> 2)`
+        guidelines.length <= 15,
+        `${def.name} has ${guidelines.length} promptGuidelines bullets (> 15)`
       );
     }
   });
@@ -477,8 +474,8 @@ describe("registerTools prompt footprint", () => {
       list_pi_minion_schedules: 0,
       list_pi_minion_workflows: 0,
       list_pi_minions: 0,
-      run_pi_minion: 2,
-      run_pi_minion_workflow: 1,
+      run_pi_minion: 13,
+      run_pi_minion_workflow: 12,
       schedule_pi_minion: 1,
       schedule_pi_minion_workflow: 1
     };
