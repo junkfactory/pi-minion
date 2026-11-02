@@ -221,8 +221,8 @@ describe("formatWorkflowConfirm", () => {
         "Stage 2",
         "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · ≤10m · starts when bugs, perf finish; uses its result",
         "",
-        "Each agent works in the background in this workspace. A failed step alerts",
-        "you right away; one summary posts when all finish. Cancel anytime with \"cancel",
+        "Each agent works in the background in this workspace. A failed step alerts you while other",
+        "steps are still going; otherwise one summary posts when all finish. Cancel anytime with \"cancel",
         "the workflow\".",
         "",
         "Run this workflow?"
@@ -517,6 +517,10 @@ describe("scheduled workflow helpers", () => {
     assert.match(plain(lines), /Runs on "0 9 \* \* 1-5" — next run 09:00/);
     assert.match(plain(lines), /Budget cap \$7\.50 per run/);
     assert.match(plain(lines), /cancel_pi_minion_schedule/);
+    assert.match(
+      plain(lines),
+      /A failed step alerts you while other steps are still going.*self-stops the schedule\s*or an uncancelled run has no successful steps; either starts a turn/s
+    );
     assert.match(plain(lines), /Schedule this workflow\?$/);
   });
 });

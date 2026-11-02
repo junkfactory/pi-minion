@@ -4,6 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
 import { createPiAdapter, setModelRegistry } from "../src/adapters/pi.js";
@@ -17,7 +18,8 @@ import {
   RUN_PI_MINION_PARAMETERS,
   RUN_PI_MINION_WORKFLOW_PARAMETERS,
   SCHEDULE_PI_MINION_PARAMETERS,
-  SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS
+  SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS,
+  registerTools
 } from "../src/tools.js";
 
 describe("adapter boundary", () => {
@@ -318,5 +320,185 @@ describe("SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS", () => {
   it("requires cron on top of the workflow fields", () => {
     assert.equal(Check(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS, { ...args, cron: "0 9 * * 1-5" }), true);
     assert.equal(Check(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS, args), false);
+  });
+});
+
+describe("parameter schema shape", () => {
+  // Pins the exact property names and required lists so a schema edit that
+  // renames a field, drops a required flag or adds an optional one fails.
+  const keys = (schema: { properties: Record<string, unknown> }): string[] =>
+    Object.keys(schema.properties).sort();
+  const required = (schema: { required?: string[] }): string[] => [...(schema.required ?? [])].sort();
+
+  it("pins the run schema properties and required fields", () => {
+    assert.deepEqual(keys(RUN_PI_MINION_PARAMETERS), [
+      "context",
+      "effort",
+      "maxBudgetUsd",
+      "model",
+      "task",
+      "timeoutMs"
+    ]);
+    assert.deepEqual(required(RUN_PI_MINION_PARAMETERS), ["context", "effort", "model", "task"]);
+  });
+
+  it("pins the workflow schema properties and required fields", () => {
+    assert.deepEqual(keys(RUN_PI_MINION_WORKFLOW_PARAMETERS), [
+      "context",
+      "maxBudgetUsd",
+      "steps",
+      "timeoutMs",
+      "title"
+    ]);
+    assert.deepEqual(required(RUN_PI_MINION_WORKFLOW_PARAMETERS), ["context", "steps", "title"]);
+  });
+
+  it("pins the workflow step properties and required fields", () => {
+    const step = RUN_PI_MINION_WORKFLOW_PARAMETERS.properties.steps.items;
+    assert.deepEqual(keys(step), [
+      "dependsOn",
+      "effort",
+      "id",
+      "maxBudgetUsd",
+      "model",
+      "task",
+      "timeoutMs"
+    ]);
+    assert.deepEqual(required(step), ["effort", "id", "model", "task"]);
+  });
+
+  it("pins the schedule schemas to the run/workflow fields plus cron", () => {
+    assert.deepEqual(keys(SCHEDULE_PI_MINION_PARAMETERS), [
+      "context",
+      "cron",
+      "effort",
+      "maxBudgetUsd",
+      "model",
+      "task",
+      "timeoutMs"
+    ]);
+    assert.deepEqual(required(SCHEDULE_PI_MINION_PARAMETERS), [
+      "context",
+      "cron",
+      "effort",
+      "model",
+      "task"
+    ]);
+    assert.deepEqual(keys(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS), [
+      "context",
+      "cron",
+      "maxBudgetUsd",
+      "steps",
+      "timeoutMs",
+      "title"
+    ]);
+    assert.deepEqual(required(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS), ["context", "cron", "steps", "title"]);
+  });
+});
+
+describe("registerTools prompt footprint", () => {
+  // Minimal fake ExtensionAPI: registerTools() only calls pi.registerTool()
+  // at registration time. Captured definitions are asserted below.
+  const registered: ToolDefinition[] = [];
+  registerTools({
+    registerTool: (definition: ToolDefinition) => {
+      registered.push(definition);
+    }
+  } as unknown as ExtensionAPI);
+
+  const byName = new Map(registered.map((def) => [def.name, def]));
+  const exposure = (name: string): string => byName.get(name)?.exposure ?? "direct";
+
+  it("registers all 11 tools and no others", () => {
+    assert.equal(registered.length, 11);
+    assert.deepEqual(
+      [...byName.keys()].sort(),
+      [
+        "cancel_pi_minion",
+        "cancel_pi_minion_schedule",
+        "cancel_pi_minion_workflow",
+        "help_pi_minion",
+        "list_pi_minion_schedules",
+        "list_pi_minion_workflows",
+        "list_pi_minions",
+        "run_pi_minion",
+        "run_pi_minion_workflow",
+        "schedule_pi_minion",
+        "schedule_pi_minion_workflow"
+      ].sort()
+    );
+  });
+
+  it("defers the 6 lifecycle tools and keeps the 5 core tools direct", () => {
+    const deferred = [
+      "cancel_pi_minion_schedule",
+      "cancel_pi_minion_workflow",
+      "list_pi_minion_schedules",
+      "list_pi_minion_workflows",
+      "schedule_pi_minion",
+      "schedule_pi_minion_workflow"
+    ];
+    const direct = [
+      "cancel_pi_minion",
+      "help_pi_minion",
+      "list_pi_minions",
+      "run_pi_minion",
+      "run_pi_minion_workflow"
+    ];
+    for (const name of deferred) assert.equal(exposure(name), "deferred", name);
+    for (const name of direct) assert.equal(exposure(name), "direct", name);
+  });
+
+  it("keeps every tool description within 300 characters", () => {
+    for (const def of registered) {
+      assert.ok(
+        def.description.length <= 300,
+        `${def.name} description is ${def.description.length} chars (> 300): ${def.description}`
+      );
+    }
+  });
+
+  it("limits every tool to 2 promptGuidelines bullets", () => {
+    for (const def of registered) {
+      const guidelines = def.promptGuidelines ?? [];
+      assert.ok(
+        guidelines.length <= 2,
+        `${def.name} has ${guidelines.length} promptGuidelines bullets (> 2)`
+      );
+    }
+  });
+
+  it("pins the exact promptGuidelines bullet count per tool", () => {
+    const expected: Record<string, number> = {
+      cancel_pi_minion: 1,
+      cancel_pi_minion_schedule: 0,
+      cancel_pi_minion_workflow: 0,
+      help_pi_minion: 0,
+      list_pi_minion_schedules: 0,
+      list_pi_minion_workflows: 0,
+      list_pi_minions: 0,
+      run_pi_minion: 2,
+      run_pi_minion_workflow: 1,
+      schedule_pi_minion: 1,
+      schedule_pi_minion_workflow: 1
+    };
+    for (const [name, count] of Object.entries(expected)) {
+      const def = byName.get(name);
+      assert.ok(def, `${name} is not registered`);
+      assert.equal((def.promptGuidelines ?? []).length, count, `${name} promptGuidelines count`);
+    }
+  });
+
+  it("keeps every tool description within 2 sentences", () => {
+    for (const def of registered) {
+      const sentences = def.description
+        .split(/(?<=[.!?])\s+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.length > 0);
+      assert.ok(
+        sentences.length <= 2,
+        `${def.name} description has ${sentences.length} sentences (> 2): ${def.description}`
+      );
+    }
   });
 });

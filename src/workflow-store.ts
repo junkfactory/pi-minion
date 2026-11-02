@@ -407,7 +407,7 @@ export function formatWorkflowConfirm(
     ...(scheduleLines
       ? [
           ...text(
-            "Each agent works in the background in this workspace. A failed step alerts\nyou right away — that tick starts a turn, and the schedule keeps running;\notherwise each run posts one quiet summary when its steps finish.",
+            "Each agent works in the background in this workspace. A failed step alerts you while other steps are still going (that alert starts a turn — the schedule keeps running);\notherwise the tick posts one quiet summary — unless the run self-stops the schedule\nor an uncancelled run has no successful steps; either starts a turn.",
             true
           ),
           [],
@@ -417,7 +417,7 @@ export function formatWorkflowConfirm(
         ]
       : [
           ...text(
-            "Each agent works in the background in this workspace. A failed step alerts\nyou right away; one summary posts when all finish. Cancel anytime with \"cancel\nthe workflow\".",
+            "Each agent works in the background in this workspace. A failed step alerts you while other\nsteps are still going; otherwise one summary posts when all finish. Cancel anytime with \"cancel\nthe workflow\".",
             true
           ),
           [],
