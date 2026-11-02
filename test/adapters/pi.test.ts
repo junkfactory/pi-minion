@@ -3,6 +3,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import {
   buildArgs,
   createPiAdapter,
+  describePolicy,
   describeUnsupported,
   environment,
   parseLine,
@@ -311,6 +312,22 @@ describe("describeUnsupported", () => {
     assert.equal(warnings.length, 2);
     assert.match(warnings[0], /maxBudgetUsd is unenforced/);
     assert.match(warnings[1], /auto-approved/);
+  });
+});
+
+describe("describePolicy", () => {
+  it("turns each unenforced capability into an instruction", () => {
+    const policies = describePolicy(fakeRequest(), fakeConfig());
+    assert.equal(policies.length, 2);
+    assert.match(policies[0], /no cost ceiling/);
+    assert.match(policies[0], /cheap model/);
+    assert.match(policies[1], /auto-approved/);
+    assert.match(policies[1], /verify the result/);
+  });
+
+  it("is exposed on the adapter so a run renders it", () => {
+    const adapter = createPiAdapter(fakeConfig());
+    assert.equal(adapter.describePolicy?.(fakeRequest(), fakeConfig()).length, 2);
   });
 });
 

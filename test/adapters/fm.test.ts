@@ -465,14 +465,15 @@ describe("refreshCatalog", () => {
 });
 
 describe("usageNotes", () => {
-  it("returns the two fm capability lines from the bound adapter", () => {
+  it("returns the three fm capability lines from the bound adapter", () => {
     const notes = createFmAdapter(fakeConfig()).usageNotes();
-    assert.equal(notes.length, 2);
-    assert.match(notes[0], /one-shot/);
-    assert.match(notes[0], /no agent tools/);
-    assert.match(notes[1], /\[image:/);
-    assert.match(notes[1], /:ocr/);
-    assert.match(notes[1], /:barcode/);
+    assert.equal(notes.length, 3);
+    assert.match(notes[0], /basic tasks/);
+    assert.match(notes[1], /one-shot/);
+    assert.match(notes[1], /no agent tools/);
+    assert.match(notes[2], /\[image:/);
+    assert.match(notes[2], /:ocr/);
+    assert.match(notes[2], /:barcode/);
   });
 
   it("keeps the notes agent-facing: no internal \"adapter\" wording, stable across calls", () => {

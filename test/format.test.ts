@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { formatTokenCount, formatTokenUsage } from "../src/agent.ui.js";
-import { deriveJobTitle, describeJobResult, formatCostUsd, formatJobFrontmatter, formatModelBreakdown, formatRelative, formatTokenModelBreakdown, thinkingPlaceholder, tokenCountsFromUsage, truncateResultForContext } from "../src/format.js";
+import { deriveJobTitle, describeJobResult, formatCostUsd, formatJobFrontmatter, formatModelBreakdown, formatNotices, formatRelative, formatTokenModelBreakdown, thinkingPlaceholder, tokenCountsFromUsage, truncateResultForContext } from "../src/format.js";
 
 function fakeOutcome(overrides: Partial<Parameters<typeof describeJobResult>[0]> = {}) {
   return {
@@ -235,6 +235,13 @@ describe("formatJobFrontmatter", () => {
     assert.match(formatJobFrontmatter({ ...base, step: "Review MR › bugs" }), /job_id: j1\nstep: Review MR › bugs\ntoken_usage/);
   });
 
+  it("marks the budget field as unenforced when the adapter ignores the cap", () => {
+    const base = { jobId: "j1", agent: "pi", model: "glm-5.3-flash", maxBudgetUsd: 5, timeoutMs: 900000, jobDir: "/tmp/j" };
+    assert.match(formatJobFrontmatter(base), /budget_usd: \\\$5\n/);
+    assert.match(formatJobFrontmatter({ ...base, budgetEnforced: true }), /budget_usd: \\\$5\n/);
+    assert.match(formatJobFrontmatter({ ...base, budgetEnforced: false }), /budget_usd: \\\$5 \(not enforced\)\n/);
+  });
+
   it("reports n/a usage when the job was killed before a result event", () => {
     const frontmatter = formatJobFrontmatter({
       jobId: "f66c0f52-f2e8-45bf-9a61-d40738af09fb",
@@ -436,5 +443,20 @@ describe("formatRelative", () => {
 
   it("renders a mid-range day value", () => {
     assert.equal(formatRelative(now - 5 * 24 * 60 * 60_000, now), "5d ago");
+  });
+});
+
+describe("formatNotices", () => {
+  it("renders facts as a Warning and policy as a Policy line", () => {
+    const notice = formatNotices(["No cost ceiling."], ["Bound the spend with a cheap model."]);
+    assert.equal(notice, "\n\n**Warning:** No cost ceiling.\n\n**Policy:** Bound the spend with a cheap model.");
+  });
+
+  it("renders policy alone when the adapter states no facts", () => {
+    assert.equal(formatNotices([], ["Scope the task."]), "\n\n**Policy:** Scope the task.");
+  });
+
+  it("returns an empty string when there is nothing to say", () => {
+    assert.equal(formatNotices([]), "");
   });
 });

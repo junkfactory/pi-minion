@@ -182,6 +182,11 @@ export interface AgentCliAdapter {
   // honor (e.g. an effort value it has no flag for). [] when nothing needs
   // flagging.
   describeUnsupported(request: MinionRequest, config: MinionConfig): string[];
+  // What the CALLING agent must do about the limits describeUnsupported
+  // states — the actionable half, rendered as a Policy line above the result.
+  // Optional: an adapter with nothing to advise omits it, and a caller that
+  // asks for policy gets [].
+  describePolicy?(request: MinionRequest, config: MinionConfig): string[];
   // Statically known capability notes for this adapter, appended into
   // help_pi_minion's usageNotes (request-free — unlike describeUnsupported,
   // this is always surfaced, not only on a run). [] when the adapter has no

@@ -169,6 +169,9 @@ export function formatJobFrontmatter(
     effort?: string;
     perModel?: ModelBreakdown[];
     maxBudgetUsd: number;
+    // Whether the adapter actually enforces maxBudgetUsd. false renders the
+    // field as advisory, so a reader never mistakes the number for a stop.
+    budgetEnforced?: boolean;
     // The limit that actually applied: the request's timeoutMs, else the
     // config default.
     timeoutMs: number;
@@ -191,7 +194,7 @@ export function formatJobFrontmatter(
     // "$" escaped: pi-tui reads an unpaired "$" as still-streaming inline
     // LaTeX and prints the rest of the paragraph raw, report link included.
     `cost_usd: ${formatCostUsd(params.totalCostUsd)}${formatModelBreakdown(params.perModel, (entry) => entry.costUsd, (n) => formatCostUsd(n))}`.replaceAll("$", "\\$"),
-    `budget_usd: \\$${params.maxBudgetUsd}`,
+    `budget_usd: \\$${params.maxBudgetUsd}${params.budgetEnforced === false ? " (not enforced)" : ""}`,
     `timeout: ${formatDurationMs(params.timeoutMs)}`,
     `output_path: ${params.jobDir}`,
     // A markdown link so pi's renderer makes it clickable (OSC 8). Only the
@@ -206,6 +209,18 @@ export function formatJobFrontmatter(
     // block on its own, so the "---" right after it is always a plain rule.
     "---"
   ].join("\n");
+}
+
+// The capability notices that precede a minion result: the facts
+// (adapter.describeUnsupported) as a Warning, the actionable half
+// (adapter.describePolicy) as a Policy line. Both are markdown paragraphs
+// separated from the frontmatter and from the result body by a blank line.
+// "" when there is nothing to say.
+export function formatNotices(warnings: string[], policies: string[] = []): string {
+  const parts: string[] = [];
+  if (warnings.length > 0) parts.push(`**Warning:** ${warnings.join(" ")}`);
+  if (policies.length > 0) parts.push(`**Policy:** ${policies.join(" ")}`);
+  return parts.length > 0 ? `\n\n${parts.join("\n\n")}` : "";
 }
 
 // Only the clean-exit path inlines its full result into the primary

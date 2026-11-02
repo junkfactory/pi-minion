@@ -347,6 +347,16 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
   ];
 }
 
+// The actionable half of describeUnsupported: what the calling agent has to
+// do about it. The facts above read as a footnote ("no cost ceiling"), which
+// an agent skims past as a $5 stop; the policy lines say what to do instead.
+export function describePolicy(_request: MinionRequest, _config: MinionConfig): string[] {
+  return [
+    "This adapter enforces no cost ceiling — the budget_usd field is advisory only. Bound the spend with a cheap model and low effort, and keep the task small.",
+    "Every built-in pi tool call in this run is auto-approved — there is no permission gate. Scope the task so it needs no destructive tools, and verify the result yourself afterwards."
+  ];
+}
+
 export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
   // Provider gate against the bound config: providersOf "[]" = keep
   // (unidentifiable), otherwise every provider must pass isProviderAllowed.
@@ -396,6 +406,7 @@ export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
     environment,
     parseLine,
     describeUnsupported,
+    describePolicy,
     usageNotes() {
       return [];
     }

@@ -21,6 +21,7 @@ import {
   deriveJobTitle,
   describeJobResult,
   formatJobFrontmatter,
+  formatNotices,
   thinkingPlaceholder,
   tokenCountsFromUsage,
   truncateResultForContext,
@@ -363,6 +364,7 @@ export async function startJob(
       ...usageFields(finalUsage),
       perModel: finalUsage?.perModel,
       maxBudgetUsd: request.maxBudgetUsd ?? config.maxBudgetUsd,
+      budgetEnforced: adapter.capabilities.supportsMaxBudgetUsd,
       timeoutMs: runTimeoutMs,
       jobDir,
       reportPath,
@@ -479,7 +481,14 @@ export async function startJob(
       const denialWarning = sawPermissionDenial
         ? `\n\n**Warning:** ${adapter.permissionDeniedWarning}`
         : "";
-      const capabilityWarning = warnings.length ? `\n\n**Warning:** ${warnings.join(" ")}` : "";
+      // Facts (no cost ceiling, auto-approved tools) plus the policy that
+      // says what to do about them — both come from the adapter, so a CLI
+      // that adds a limit teaches the card the new rule without touching
+      // this file.
+      const capabilityNotices = formatNotices(
+        warnings,
+        adapter.describePolicy?.(validRequest, config) ?? []
+      );
       const modelListNote =
         code !== 0 && !timedOut && !output.exceededOutputLimit ? `\n\nIf the model was rejected: Call help_pi_minion for the models usable here.` : "";
       let finalNote = "";
@@ -487,7 +496,7 @@ export async function startJob(
         const note = onFinalResult?.(finalResult);
         if (note) finalNote = `\n\n**Schedule stopped:** ${note}`;
       } catch {}
-      const header = `${frontmatter(reportPath)}${denialWarning}${capabilityWarning}${modelListNote}`;
+      const header = `${frontmatter(reportPath)}${denialWarning}${capabilityNotices}${modelListNote}`;
       const zeroCap = (config.maxResultContextBytes ?? DEFAULT_MAX_RESULT_CONTEXT_BYTES) <= 0;
       const readHint = reportPath && !zeroCap ? "\n\nIf you need more detail, see the report linked above and any files it references." : "";
       postResult(
