@@ -429,12 +429,11 @@ describe("registerTools prompt footprint", () => {
     );
   });
 
-  it("defers all 11 tools", () => {
+  it("defers 10 tools and keeps help_pi_minion direct", () => {
     const deferred = [
       "cancel_pi_minion",
       "cancel_pi_minion_schedule",
       "cancel_pi_minion_workflow",
-      "help_pi_minion",
       "list_pi_minion_schedules",
       "list_pi_minion_workflows",
       "list_pi_minions",
@@ -444,6 +443,9 @@ describe("registerTools prompt footprint", () => {
       "schedule_pi_minion_workflow"
     ];
     for (const name of deferred) assert.equal(exposure(name), "deferred", name);
+    const help = registered.find((t: any) => t.name === "help_pi_minion");
+    assert.ok(help, "help_pi_minion is registered");
+    assert.notEqual(help.exposure, "deferred", "help_pi_minion should not be deferred");
   });
 
   it("keeps every tool description within 300 characters", () => {
@@ -470,7 +472,7 @@ describe("registerTools prompt footprint", () => {
       cancel_pi_minion: 1,
       cancel_pi_minion_schedule: 0,
       cancel_pi_minion_workflow: 0,
-      help_pi_minion: 0,
+      help_pi_minion: 3,
       list_pi_minion_schedules: 0,
       list_pi_minion_workflows: 0,
       list_pi_minions: 0,
