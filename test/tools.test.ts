@@ -4,12 +4,13 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
 import { createPiAdapter, setModelRegistry } from "../src/adapters/pi.js";
 import { createFmAdapter, FM_USAGE_NOTES } from "../src/adapters/fm.js";
-import { fakeConfig, fakeModelRegistry } from "./fakes.js";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { createFakeAdapter, fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
   buildHelpModelList,
   buildUsageNotes,
@@ -476,8 +477,8 @@ describe("registerTools prompt footprint", () => {
       list_pi_minion_schedules: 0,
       list_pi_minion_workflows: 0,
       list_pi_minions: 0,
-      run_pi_minion: 13,
-      run_pi_minion_workflow: 12,
+      run_pi_minion: 12,
+      run_pi_minion_workflow: 11,
       schedule_pi_minion: 1,
       schedule_pi_minion_workflow: 1
     };
@@ -485,6 +486,32 @@ describe("registerTools prompt footprint", () => {
       const def = byName.get(name);
       assert.ok(def, `${name} is not registered`);
       assert.equal((def.promptGuidelines ?? []).length, count, `${name} promptGuidelines count`);
+    }
+  });
+
+  it("help payload carries the model routing table", async () => {
+    const help = byName.get("help_pi_minion");
+    assert.ok(help, "help_pi_minion is not registered");
+    // Pin a config-bound fake so ensureRegistry() no-ops inside execute():
+    // no machine-CLI discovery (`which`/`fm models`) mid-test — same seam
+    // job-runner tests use (see test/job-runner.test.ts).
+    setAdaptersForTest([createFakeAdapter(fakeConfig())]);
+    try {
+      const result = await help.execute(
+        "call-help",
+        {},
+        undefined,
+        undefined,
+        {} as ExtensionToolContext
+      );
+      const payload = result.details as { modelRouting?: string };
+      assert.equal(typeof payload.modelRouting, "string", "payload.modelRouting must be a string");
+      assert.ok(
+        payload.modelRouting?.includes("**Model Routing:**"),
+        "payload.modelRouting must contain the **Model Routing:** table"
+      );
+    } finally {
+      setAdaptersForTest();
     }
   });
 

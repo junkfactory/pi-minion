@@ -91,7 +91,8 @@ export const PI_MINION_USAGE_NOTES = [
   "schedule_pi_minion_workflow takes run_pi_minion_workflow's fields plus a cron expression (deferred — see the tool_search note); use only for a multi-step workflow that recurs or runs later (run_pi_minion_workflow for one-offs, schedule_pi_minion for a single recurring task); later ticks reuse the steps and context captured now, so make them self-contained — for a \"watch X until Y\" task, put the completion condition in the final step's task. The user approves once when it is scheduled, then each tick starts a fresh run (skipped while the previous run is still going) whose summary posts quietly unless the run self-stops the schedule or no step succeeded (uncancelled; then it starts a turn). It needs exactly one final step (one no other step depends on); only that step may end the schedule by finishing its reply with the stop marker; stop it with cancel_pi_minion_schedule (a run in progress is cancelled separately with cancel_pi_minion_workflow and the schedule's lastWorkflowId).",
   "All other pi-minion tools are registered but deferred — hidden from the prompt by default. Call `tool_search` (e.g. `tool_search({ query: 'pi_minion' })`) to discover and activate them on demand. Surface `tool_search` itself with `{\"defaultTools\": [\"+tool_search\"]}` in pi's settings, the `-t +tool_search` CLI flag, or by naming it directly in `defaultTools`; a project-scoped `.pi/settings.json` overrides this per project.",
   "For long-result tasks, tell the minion to lead with a concise TLDR — the posted summary may be truncated. For follow-ups, read the relevant sections of the prior report (list_pi_minions gives its reportPath) instead of reconstructing findings from memory.",
-  "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up."
+  "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
+  "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
 export const RUN_PI_MINION_PARAMETERS = Type.Object({
@@ -372,7 +373,6 @@ export function registerTools(pi: ExtensionAPI): void {
       "Track jobs only with list_pi_minions and cancel_pi_minion — don't poll.",
       "For schedules, workflow lifecycle, or model/task guidance, call help_pi_minion (related tools are registered but not listed).",
       "**Delegation Policy:** Delegate heavy lifting to specialized minions to prevent chat context bloat and budget exhaustion.",
-      formatRoutingTable(promptConfig.routingTable),
       "**Repository Exploration:** For large repositories, delegate code discovery, file tree mapping, and search queries to an Explore minion. Never dump raw codebase files into your own chat context.",
       "**Complex Implementation:** Delegate multi-file code generation and refactoring to Complex Implementation minions to leverage their massive max-out token limits.",
       "**Debugging & Research:** Delegate deep log trace analysis and broad documentation reviews to specialized Debug and Research minions.",
@@ -672,7 +672,6 @@ export function registerTools(pi: ExtensionAPI): void {
     promptGuidelines: [
       "Confirm the plan with the user; never call speculatively.",
       "**Delegation Policy:** Delegate heavy lifting to specialized minions to prevent chat context bloat and budget exhaustion.",
-      formatRoutingTable(promptConfig.routingTable),
       "**Repository Exploration:** For large repositories, delegate code discovery, file tree mapping, and search queries to an Explore minion. Never dump raw codebase files into your own chat context.",
       "**Complex Implementation:** Delegate multi-file code generation and refactoring to Complex Implementation minions to leverage their massive max-out token limits.",
       "**Debugging & Research:** Delegate deep log trace analysis and broad documentation reviews to specialized Debug and Research minions.",
@@ -855,6 +854,7 @@ export function registerTools(pi: ExtensionAPI): void {
     parameters: Type.Object({}),
     async execute() {
       const config = await loadConfig();
+      const promptConfig = readPromptConfigSync();
       await ensureRegistry(config);
       // Opportunistic live-catalog refresh over every registered adapter —
       // whatever subprocess or registry lookup enumerates models, it happens
@@ -866,6 +866,7 @@ export function registerTools(pi: ExtensionAPI): void {
         models: buildHelpModelList(listAdapters()),
         examples: PI_MINION_EXAMPLES,
         usageNotes: buildUsageNotes(listAdapters(), config),
+        modelRouting: formatRoutingTable(promptConfig.routingTable),
         defaults: {
           timeoutMs: config.timeoutMs,
           maxBudgetUsd: config.maxBudgetUsd
