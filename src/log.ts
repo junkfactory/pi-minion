@@ -22,6 +22,7 @@ export type JobLogEvent =
   | "workflow_started"
   | "workflow_finished"
   | "workflow_cancelled"
+  | "workflow_aborted"
   | "workflow_declined"
   // A workflow step rejected before spawn (validation/model-routing error);
   // job_id is the step id since no job exists yet.

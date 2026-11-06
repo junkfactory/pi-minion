@@ -14,7 +14,6 @@ import {
   isWorkflowRunning,
   pruneWorkflows,
   formatWorkflowSummary,
-  formatWorkflowAlert,
   MAX_WORKFLOW_STEPS,
   referencedStepIds,
   rehomeWorkflows,
@@ -221,9 +220,9 @@ describe("formatWorkflowConfirm", () => {
         "Stage 2",
         "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · ≤10m · starts when bugs, perf finish; uses its result",
         "",
-        "Each agent works in the background in this workspace. A failed step alerts you while other",
-        "steps are still going; otherwise one summary posts when all finish. Cancel anytime with \"cancel",
-        "the workflow\".",
+        "Each agent works in the background in this workspace. A step that fails or reports its packet",
+        "unworkable aborts the whole run and posts a summary; otherwise one summary posts when all",
+        "finish. Cancel anytime with \"cancel the workflow\".",
         "",
         "Run this workflow?"
       ].join("\n")
@@ -412,41 +411,6 @@ describe("workflow status helpers", () => {
     assert.equal(formatWorkflowLabel(fakeWorkflow()), "⇉ Review MR · 1/2 steps · verify");
   });
 
-  it("formats an alert with the failed step, what it blocked, and what is still going", () => {
-    const wf = fakeWorkflow({
-      steps: [
-        { id: "a", task: "t", model: "sonnet", effort: "medium", dependsOn: [], status: "failed", result: "spawn failed" },
-        { id: "b", task: "t", model: "sonnet", effort: "medium", dependsOn: ["a"], status: "skipped" },
-        { id: "c", task: "t", model: "luna", effort: "low", dependsOn: [], status: "running", jobId: "j3" },
-        { id: "d", task: "t", model: "sonnet", effort: "medium", dependsOn: [], status: "pending" }
-      ]
-    });
-    assert.equal(
-      formatWorkflowAlert("wf1", wf),
-      [
-        "## Pi minion workflow step failed: Review MR",
-        "",
-        "- a: failed · sonnet\n  spawn failed",
-        "",
-        "Blocked: b",
-        "",
-        "Still going: c (running), d (pending)",
-        "",
-        "The workflow keeps going — cancel it with cancel_pi_minion_workflow wf1 if this failure makes it pointless."
-      ].join("\n")
-    );
-  });
-
-  it("names the schedule's decision on a scheduled run's alert", () => {
-    const wf = fakeWorkflow({ scheduled: { stop: () => true } });
-    wf.steps[0].status = "failed";
-    const text = formatWorkflowAlert("wf1", wf);
-    assert.match(text, /The schedule keeps running; this alert starts a turn so you can decide\./);
-    assert.match(text, /cancel_pi_minion_schedule/);
-    assert.doesNotMatch(text, /cancel_pi_minion_workflow/);
-    assert.doesNotMatch(text, /Blocked:/);
-  });
-
   it("builds the widget status with current stage and resolved effort", () => {
     const status = workflowWidgetStatus(fakeWorkflow());
     assert.equal(status.stage, 2);
@@ -519,7 +483,7 @@ describe("scheduled workflow helpers", () => {
     assert.match(plain(lines), /cancel_pi_minion_schedule/);
     assert.match(
       plain(lines),
-      /A failed step alerts you while other steps are still going.*self-stops the schedule\s*or an uncancelled run has no successful steps; either starts a turn/s
+      /A step that fails or reports its packet\s*unworkable aborts the whole run \(that summary starts a turn\); otherwise the tick posts one quiet\s*summary — unless the run self-stops the schedule or no step succeeded; either starts a turn/s
     );
     assert.match(plain(lines), /Schedule this workflow\?$/);
   });

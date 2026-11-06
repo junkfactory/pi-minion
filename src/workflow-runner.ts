@@ -13,12 +13,13 @@ import { distinctModels } from "./format.js";
 import { logJobEvent, type JobLogEvent } from "./log.js";
 import { hasStopMarker, STOP_SCHEDULE_INSTRUCTION, schedules, stopSchedule } from "./schedule-store.js";
 import {
-  formatWorkflowAlert,
   formatWorkflowSummary,
   isWorkflowRunning,
   MAX_PARALLEL_STEPS,
   newWorkflow,
   renderStepTask,
+  STEP_BLOCKED_INSTRUCTION,
+  STEP_BLOCKED_MARKER,
   terminalStepIds,
   workflows,
   workflowStepTitle,
@@ -102,13 +103,16 @@ function syncUi(id: string, wf: MinionWorkflow, deps: Pick<WorkflowDeps, "ui">):
 // Posts the one summary and removes the tree. Idempotent; a requested
 // cancel posts quietly (the user already knows), a natural finish starts
 // the turn that reports back.
-// A scheduled run is quiet unless a final step ended the schedule or no step
-// succeeded (a broken schedule would otherwise fail silently every tick).
+// A scheduled run is quiet unless a final step ended the schedule, an abort
+// happened, or no step succeeded (a broken schedule would otherwise fail
+// silently every tick).
 function finishWorkflow(
   id: string,
   wf: MinionWorkflow,
   triggerTurn: boolean,
-  deps: Pick<WorkflowDeps, "ui" | "post" | "log">
+  deps: Pick<WorkflowDeps, "ui" | "post" | "log">,
+  // Extra "Needs attention" line: an abort names the step and its reason.
+  alert?: string
 ): void {
   if (wf.finishedAt !== undefined) return;
   wf.finishedAt = Date.now();
@@ -120,7 +124,12 @@ function finishWorkflow(
     note = `"${wf.title}" ended itself; the final step reported the task complete.`;
   }
   const allFailed = wf.scheduled !== undefined && !wf.cancelled && wf.steps.every((step) => step.status !== "done");
-  const summary = formatWorkflowSummary(wf, note, allFailed ? "no step of this scheduled run succeeded." : undefined);
+  // One "Needs attention" line, so an abort and a totally failed scheduled
+  // run both reaching the summary read as one sentence, not a lost reason.
+  const attention = [alert, allFailed ? "no step of this scheduled run succeeded." : undefined]
+    .filter((part) => part !== undefined)
+    .join(" ");
+  const summary = formatWorkflowSummary(wf, note, attention || undefined);
   try {
     wf.session?.finish(summary);
   } catch {}
@@ -128,15 +137,18 @@ function finishWorkflow(
     wf.sessionId,
     summary,
     { id, steps: wf.steps.map((step) => ({ id: step.id, status: step.status, jobId: step.jobId })) },
-    triggerTurn && (!wf.scheduled || note !== undefined || allFailed)
+    // An abort (alert) always starts a turn: the user has a decision to make,
+    // whether the run was scheduled or not.
+    triggerTurn && (!wf.scheduled || note !== undefined || allFailed || alert !== undefined)
   );
 }
 
 // Starts every pending step whose dependencies are all done (up to
 // MAX_PARALLEL_STEPS running), skips steps behind a dead dependency, and
-// finishes once nothing is pending or running. Independent branches keep going.
+// finishes once nothing is pending or running. Independent branches keep going
+// until a step fails or reports its packet unworkable — that aborts the run.
 function pump(id: string, wf: MinionWorkflow, deps: WorkflowDeps): void {
-  if (wf.cancelled || wf.finishedAt !== undefined) return;
+  if (wf.cancelled || wf.finishedAt !== undefined || wf.abortedAt !== undefined) return;
   const byId = new Map(wf.steps.map((step) => [step.id, step]));
   // Skips can cascade down a chain, so repeat until stable.
   for (let changed = true; changed; ) {
@@ -158,38 +170,86 @@ function pump(id: string, wf: MinionWorkflow, deps: WorkflowDeps): void {
     startStep(id, wf, step, deps);
   }
   syncUi(id, wf, deps);
-  // A failure that settles the run posts only the summary (one post, one
-  // turn); a failure with work still in flight alerts now instead of waiting
-  // for the graph to drain.
+  // A step that failed aborted the run in settle(), so the only finish left
+  // here is an ordinary drain: nothing pending or running.
   if (wf.steps.every((step) => step.status !== "pending" && step.status !== "running")) {
     finishWorkflow(id, wf, true, deps);
-    return;
   }
-  alertFailure(id, wf, deps);
 }
 
-// One early alert per run, the first time a step fails while other steps are
-// still going, so the orchestrator can react (or cancel) without waiting for
-// the whole DAG. It always starts a turn: for a scheduled run that turn is the
-// decision point between stopping the schedule and letting the next tick run.
-// `step_failed` is reused as the log event (pre-spawn failures already log it;
-// this adds the workflow-level line).
-function alertFailure(id: string, wf: MinionWorkflow, deps: Pick<WorkflowDeps, "post" | "log">): void {
-  if (wf.alertedAt !== undefined) return;
-  const failed = wf.steps.filter((step) => step.status === "failed");
-  if (failed.length === 0) return;
-  wf.alertedAt = Date.now();
-  deps.log("step_failed", logInfo(id, wf, `failed=${failed.map((step) => step.id).join(",")}`));
-  deps.post(
-    wf.sessionId,
-    formatWorkflowAlert(id, wf),
-    {
+// A blocked or failed step ends the whole workflow: a packet that cannot be
+// worked, or a step that never ran, would otherwise let independent branches
+// spend budget on work whose premise is gone. One abort per run; it cancels
+// running steps, skips the pending ones, and posts the summary with the reason.
+function abortWorkflow(
+  id: string,
+  wf: MinionWorkflow,
+  deps: Pick<WorkflowDeps, "ui" | "post" | "log" | "stopStep">,
+  trigger: { stepId: string; reason: string; blocked: boolean }
+): void {
+  if (wf.abortedAt !== undefined || wf.cancelled || wf.finishedAt !== undefined) return;
+  wf.abortedAt = Date.now();
+  let cancelled = 0;
+  for (const step of wf.steps) {
+    if (step.status === "running") {
+      step.status = "cancelled";
+      cancelled++;
+      if (step.jobId) deps.stopStep(step.jobId);
+    } else if (step.status === "pending") {
+      step.status = "skipped";
+    }
+  }
+  deps.log(
+    "workflow_aborted",
+    logInfo(
       id,
-      alert: "step_failed",
-      steps: wf.steps.map((step) => ({ id: step.id, status: step.status, jobId: step.jobId }))
-    },
-    true
+      wf,
+      `step=${trigger.stepId} ${trigger.blocked ? "blocked" : "failed"} reason="${trigger.reason.replaceAll('"', "'")}"`
+    )
   );
+  const swept = cancelled > 0 ? `; ${cancelled} step(s) cancelled` : "";
+  // The reason often ends in its own sentence period; the template adds
+  // another, so trim it before interpolating.
+  const reason = trigger.reason.trim().replace(/\.+$/, "");
+  const alert = trigger.blocked
+    ? `Step ${trigger.stepId} blocked: ${reason}. The packet needs revision; workflow aborted${swept}.`
+    : `Step ${trigger.stepId} failed: ${reason}. Workflow aborted${swept}.`;
+  finishWorkflow(id, wf, true, deps, alert);
+}
+
+// 200 chars matches the summary's TLDR cap — enough of a reason to act on.
+const REASON_LENGTH = 200;
+
+function replyHead(text: string | undefined): string | undefined {
+  return text
+    ?.split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+}
+
+// A blocked reply says so on its last non-empty line, with the one-line reason
+// directly above it — falling back to a generic reason when that line is
+// blank; same last-line rule as hasStopMarker, so a quoted marker never
+// counts. Returns the reply with the marker line stripped.
+function blockedReply(finalResult: string | undefined): { result?: string; reason: string } | undefined {
+  const lines = finalResult?.trimEnd().split(/\r?\n/);
+  if (!lines || lines.at(-1)?.trim() !== STEP_BLOCKED_MARKER) return undefined;
+  const reason = lines.at(-2)?.trim().slice(0, REASON_LENGTH);
+  return {
+    result: lines.slice(0, -1).join("\n").trimEnd() || undefined,
+    reason: reason || "packet reported unworkable"
+  };
+}
+
+// A scheduled terminal step gets both trailing rules, and the blocked-marker
+// rule must be read last: its "very last line" rule is what wins over the
+// stop rule's own last-line rule, so a step can still report its packet
+// unworkable instead of silently ending the schedule.
+function stepTask(step: WorkflowStep, wf: MinionWorkflow, terminal: boolean): string {
+  const task = renderStepTask(step.task, wf.steps, wf.maxResultPreviewBytes, step.dependsOn);
+  if (!terminal) return task + STEP_BLOCKED_INSTRUCTION + STEP_RESULT_INSTRUCTION;
+  if (!wf.scheduled) return task + STEP_BLOCKED_INSTRUCTION;
+  return task + STOP_SCHEDULE_INSTRUCTION + STEP_BLOCKED_INSTRUCTION;
 }
 
 function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: WorkflowDeps): void {
@@ -198,23 +258,37 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
   const settle = (outcome: StepOutcome) => {
     // A cancelled step's job still exits and reports; ignore it.
     if (step.status !== "running") return;
-    step.status = outcome.ok ? "done" : "failed";
-    step.result = outcome.finalResult ?? outcome.errorReason;
     step.reportPath = outcome.reportPath;
     step.startedAt = outcome.startedAt;
     step.finishedAt = outcome.finishedAt;
     step.tokenUsage = outcome.tokenUsage;
     step.totalCostUsd = outcome.totalCostUsd;
-    if (outcome.ok && wf.scheduled && terminal && hasStopMarker(outcome.finalResult)) {
+    // A reply that reports its own packet unworkable voids the run: abort
+    // before the stop-marker check (its marker is on the last line, so
+    // hasStopMarker could not fire anyway).
+    const blocked = outcome.ok ? blockedReply(outcome.finalResult) : undefined;
+    if (blocked) {
+      step.status = "failed";
+      step.result = blocked.result;
+      abortWorkflow(id, wf, deps, { stepId: step.id, reason: blocked.reason, blocked: true });
+      return;
+    }
+    step.status = outcome.ok ? "done" : "failed";
+    step.result = outcome.finalResult ?? outcome.errorReason;
+    if (!outcome.ok) {
+      // A step that never ran leaves nothing to build on either, so it aborts
+      // the same way rather than letting independent branches keep spending.
+      const reason = (outcome.errorReason ?? replyHead(step.result))?.slice(0, REASON_LENGTH);
+      abortWorkflow(id, wf, deps, { stepId: step.id, reason: reason || "no reason reported", blocked: false });
+      return;
+    }
+    if (wf.scheduled && terminal && hasStopMarker(outcome.finalResult)) {
       wf.stopRequested = true;
     }
     pump(id, wf, deps);
   };
   const request: MinionRequest = {
-    task:
-      renderStepTask(step.task, wf.steps, wf.maxResultPreviewBytes, step.dependsOn) +
-      (terminal ? "" : STEP_RESULT_INSTRUCTION) +
-      (wf.scheduled && terminal ? STOP_SCHEDULE_INSTRUCTION : ""),
+    task: stepTask(step, wf, terminal),
     workspace: wf.cwd,
     model: step.model,
     effort: step.effort,

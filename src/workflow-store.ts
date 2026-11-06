@@ -18,6 +18,12 @@ import { formatNextRun } from "./schedule-store.js";
 export const MAX_WORKFLOW_STEPS = 10;
 export const MAX_PARALLEL_STEPS = 4;
 
+// Lets a step refuse a packet it cannot work as specified: the runner then
+// aborts the whole run instead of letting dependent (or parallel) steps build
+// on work whose premise is gone. Mirrors schedule-store.ts's stop marker.
+export const STEP_BLOCKED_MARKER = "[[STEP_BLOCKED]]";
+export const STEP_BLOCKED_INSTRUCTION = `\n\nIf this task as specified cannot be done — the packet is wrong (its constraints contradict each other, the files or assumptions it names are missing, or the work does not fit the stated limits) — do not improvise: put a one-line reason on the second-to-last line of your final reply and ${STEP_BLOCKED_MARKER} alone on the last line. Otherwise never write it; a reply that completed the task must not carry the marker. When you do use it, it is the very last line of the reply: write nothing after it.`;
+
 export type WorkflowStepDef = {
   id: string;
   // May contain {{steps.<id>.result}}; each referenced id must be in dependsOn.
@@ -63,9 +69,10 @@ export type MinionWorkflow = {
   startedAt: number;
   cancelled: boolean;
   finishedAt?: number;
-  // Set when the one early step-failure alert posted; later failures in the
-  // same run ride in the final summary instead of starting more turns.
-  alertedAt?: number;
+  // Set by the one abort a run gets: the first step to fail or report its
+  // packet unworkable cancels the rest and posts the summary itself, so later
+  // failures (and any pending step) never start again.
+  abortedAt?: number;
   // Set on a run started by a schedule tick: the final summary posts quietly,
   // and a final step ending its reply with the stop marker calls `stop`.
   scheduled?: { stop: () => boolean };
@@ -407,7 +414,7 @@ export function formatWorkflowConfirm(
     ...(scheduleLines
       ? [
           ...text(
-            "Each agent works in the background in this workspace. A failed step alerts you while other steps are still going (that alert starts a turn — the schedule keeps running);\notherwise the tick posts one quiet summary — unless the run self-stops the schedule\nor an uncancelled run has no successful steps; either starts a turn.",
+            "Each agent works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run (that summary starts a turn); otherwise the tick posts one quiet\nsummary — unless the run self-stops the schedule or no step succeeded; either starts a turn.",
             true
           ),
           [],
@@ -417,7 +424,7 @@ export function formatWorkflowConfirm(
         ]
       : [
           ...text(
-            "Each agent works in the background in this workspace. A failed step alerts you while other\nsteps are still going; otherwise one summary posts when all finish. Cancel anytime with \"cancel\nthe workflow\".",
+            "Each agent works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run and posts a summary; otherwise one summary posts when all\nfinish. Cancel anytime with \"cancel the workflow\".",
             true
           ),
           [],
@@ -479,28 +486,6 @@ export function formatWorkflowSummary(wf: MinionWorkflow, note?: string, alert?:
       : []),
     ...(note ? ["", `**Schedule stopped:** ${note}`] : []),
     ...(alert ? ["", `**Needs attention:** ${alert}`] : [])
-  ].join("\n");
-}
-
-// The interim post a step failure earns while its run continues: the failed
-// step's own bullet (reason included), what it blocked, and what is still
-// going. Posted once per run; the final summary carries everything else.
-export function formatWorkflowAlert(id: string, wf: MinionWorkflow): string {
-  const failed = wf.steps.filter((step) => step.status === "failed");
-  const blocked = wf.steps.filter((step) => step.status === "skipped");
-  const live = wf.steps.filter((step) => step.status === "pending" || step.status === "running");
-  return [
-    `## Pi minion workflow step failed: ${wf.title}`,
-    "",
-    ...failed.map(stepBullet),
-    ...(blocked.length ? ["", `Blocked: ${joinIds(blocked.map((step) => step.id))}`] : []),
-    ...(live.length
-      ? ["", `Still going: ${live.map((step) => `${step.id} (${step.status})`).join(", ")}`]
-      : []),
-    "",
-    wf.scheduled
-      ? `The schedule keeps running; this alert starts a turn so you can decide. Stop it with cancel_pi_minion_schedule, or leave it to the next tick.`
-      : `The workflow keeps going — cancel it with cancel_pi_minion_workflow ${id} if this failure makes it pointless.`
   ].join("\n");
 }
 

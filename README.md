@@ -132,13 +132,16 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   on "No"; declining runs nothing, and a session without a UI refuses.
 - The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
   on pi, agy, or fm are marked "no cost ceiling" and counted separately.
-- Steps post no end-of-job message; a step that fails while the run continues
-  posts one alert that starts a turn immediately, and one summary at the end
-  (per-step status, model, `token_usage`, `cost_usd`, `reportPath`) starts a
-  turn of its own with each step's TLDR inlined — open the `reportPath` of
-  the one step whose TLDR isn't enough, never every report.
-- A failed, skipped, or cancelled step skips its dependents while independent
-  branches keep going.
+- Steps post no end-of-job message; one summary at the end (per-step
+  status, model, `token_usage`, `cost_usd`, `reportPath`) starts a turn with
+  each step's TLDR inlined — open the `reportPath` of the one step whose TLDR
+  isn't enough, never every report.
+- A step that fails, or that reports its packet unworkable (a one-line reason,
+  then `[[STEP_BLOCKED]]` alone on its last reply line), aborts the whole run:
+  running steps are cancelled, pending ones skipped, and the summary carries a
+  "Needs attention" line naming the step and its reason. A failed, skipped, or
+  cancelled step would otherwise only skip its dependents while independent
+  branches kept spending.
 - A step with dependents is told to lead its reply with a 3-5 line TLDR (its
   first line becomes the summary's TLDR) and keep detail after it; terminal
   steps keep the standing concise prompt.
@@ -160,10 +163,11 @@ fields as `run_pi_minion_workflow`.
   dialog (which adds the cron, next run, and per-run budget) is the only
   approval — later ticks never ask again.
 - Each tick starts a fresh workflow, skipped (logged `status=skipped`) while
-  the previous one is still going. A failed step in a tick posts an alert
-  that starts a turn immediately while the schedule keeps running; the run's
-  summary posts without starting a turn unless the run ended the schedule or
-  no step succeeded, in which case it starts one and says so.
+  the previous one is still going. A step that fails or reports its packet
+  unworkable aborts that run (logged `status=workflow_aborted`); the run's
+  summary posts without starting a turn unless the run ended the schedule, an
+  abort happened, or no step succeeded, in which case it starts one and says
+  so.
 - Each step's budget cap and timeout are fixed when the schedule is approved,
   not re-read from `pi-minion.json` on later runs.
 - The workflow must have exactly one final step (one no other step depends
