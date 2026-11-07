@@ -12,7 +12,10 @@ import {
   isModelPattern,
   isProviderAllowed,
   isProviderBlocked,
+  isValidMaxTurns,
   loadConfig,
+  MAX_MAX_TURNS,
+  MIN_MAX_TURNS,
   modelMatchesPattern,
   readShortcutConfigSync,
   resolveShortcut,
@@ -307,6 +310,51 @@ describe("usageNotes config", () => {
       loadWith(JSON.stringify({ usageNotes: [["nested"]] })),
       /Invalid pi-minion configuration/
     );
+  });
+});
+
+describe("maxTurns config", () => {
+  // Same one-shot override-file pattern as the loadConfig merge tests above.
+  async function loadWith(overrideText: string): Promise<MinionConfig> {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, overrideText, "utf8");
+      return await loadConfig(overridePath);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  }
+
+  it("bounds the cap to 1..100000, rejecting fractions, NaN and infinity", () => {
+    assert.equal(MIN_MAX_TURNS, 1);
+    assert.equal(MAX_MAX_TURNS, 100_000);
+    for (const good of [1, 100_000]) {
+      assert.equal(isValidMaxTurns(good), true, `maxTurns=${good} should pass`);
+    }
+    for (const bad of [0, -1, 100_001, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      assert.equal(isValidMaxTurns(bad), false, `maxTurns=${bad} should fail`);
+    }
+  });
+
+  it("passes both bounds through the loadConfig merge", async () => {
+    assert.equal((await loadWith(JSON.stringify({ maxTurns: 1 }))).maxTurns, 1);
+    assert.equal((await loadWith(JSON.stringify({ maxTurns: 100_000 }))).maxTurns, 100_000);
+  });
+
+  it("leaves the cap undefined when the config omits it", async () => {
+    // Absence is the default: no DEFAULT_MAX_TURNS constant fills it in.
+    assert.equal((await loadWith("{}")).maxTurns, undefined);
+  });
+
+  it("rejects an out-of-range, fractional, or non-numeric config cap at load", async () => {
+    for (const maxTurns of [0, -1, 100_001, 1.5, null, "5"]) {
+      await assert.rejects(
+        loadWith(JSON.stringify({ maxTurns })),
+        /Invalid pi-minion configuration/,
+        `maxTurns=${String(maxTurns)} should be rejected`
+      );
+    }
   });
 });
 

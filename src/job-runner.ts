@@ -3,19 +3,35 @@ import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { JobUI, StepRunStats } from "./agent.ui.js";
-import type { MinionConfig, MinionRequest, TokenCounts, UsageTotals } from "./adapters/types.js";
+import type {
+  AdapterParseState,
+  AgentCliAdapter,
+  MinionConfig,
+  MinionRequest,
+  TokenCounts,
+  UsageTotals
+} from "./adapters/types.js";
 import { resolveTaskText, truncate } from "./adapters/util.js";
-import { ensureRegistry, listAdapters, providersOfModel, resolveAdapterForModelRefreshed } from "./adapters/registry.js";
+import {
+  ensureRegistry,
+  listAdapters,
+  providersOfModel,
+  resolveAdapterForModel,
+  resolveAdapterForModelRefreshed
+} from "./adapters/registry.js";
 import { writeChildSession } from "./child-session.js";
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_RESULT_CONTEXT_BYTES,
   DEFAULT_MAX_RESULT_PREVIEW_BYTES,
   DEFAULT_PRUNE_AFTER_DAYS,
+  isValidMaxTurns,
   isModelAllowed,
   isModelBlocked,
   isProviderAllowed,
-  loadConfig
+  loadConfig,
+  MAX_MAX_TURNS,
+  MIN_MAX_TURNS
 } from "./config.js";
 import {
   deriveJobTitle,
@@ -48,6 +64,22 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 const MAX_PREVIEW_BYTES = 8_192;
 const MAX_PREVIEW_LINE_LENGTH = 64;
 const STATUS_UPDATE_INTERVAL_MS = 1_000;
+// Grace for a child to act on a teardown request (stdin EOF, or SIGTERM after
+// it) before the next, harsher signal.
+const GRACE_MS = 5_000;
+
+// The run's effective turn cap. A request value is final — a number is the cap,
+// and null is a pinned "no cap" (a schedule resolved step ?? workflow ?? config
+// when it was created, so a later config edit must not retarget a running
+// schedule). config.maxTurns is only the default for a request that names
+// neither, i.e. an ordinary one-off run.
+export function resolveMaxTurns(
+  request: Pick<MinionRequest, "maxTurns">,
+  config: Pick<MinionConfig, "maxTurns">
+): number | undefined {
+  if (request.maxTurns === null) return undefined;
+  return request.maxTurns ?? config.maxTurns;
+}
 
 export async function validateRequest(
   request: MinionRequest,
@@ -88,6 +120,31 @@ export async function validateRequest(
     throw new Error(
       `timeoutMs must be a positive number of milliseconds no greater than ${MAX_TIMEOUT_MS} (Node's setTimeout limit)`
     );
+  }
+  if (request.maxTurns !== undefined && request.maxTurns !== null && !isValidMaxTurns(request.maxTurns)) {
+    throw new Error(
+      `maxTurns must be a whole number from ${MIN_MAX_TURNS} to ${MAX_MAX_TURNS} (omit it for no turn cap)`
+    );
+  }
+  // The adapter check runs on the EFFECTIVE cap, not just the request's own:
+  // a config.maxTurns default reaches the runner the same way, so a request
+  // that names none but inherits one must be rejected here too.
+  if (resolveMaxTurns(request, config) !== undefined) {
+    // A cap is enforced by counting the adapter's turnStart events, so an
+    // adapter that reports no turn boundaries would leave it silently
+    // unenforced: fail fast instead of accepting a cap that never fires.
+    let capAdapter: AgentCliAdapter | undefined;
+    try {
+      capAdapter = resolveAdapterForModel(request.model);
+    } catch {
+      // Unknown model: startJob's refreshed resolution reports it, not this.
+      capAdapter = undefined;
+    }
+    if (capAdapter && !capAdapter.capabilities.emitsTurnEvents) {
+      throw new Error(
+        `maxTurns is not supported for the ${capAdapter.command} adapter — it reports no assistant turn boundaries. Omit maxTurns.`
+      );
+    }
   }
   if (!request.task.trim()) throw new Error("task is required");
   if (!request.effort?.trim())
@@ -147,6 +204,10 @@ export async function startJob(
     await ensureRegistry(config);
     await Promise.all(listAdapters().map((candidate) => candidate.refreshCatalog?.()));
   });
+  // One parse scratch per job: an adapter that keeps state across lines (agy's
+  // turnStart dedupe) must never share it with a concurrent job on the same
+  // adapter instance.
+  const parseState: AdapterParseState = {};
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
   const title = workflowStep?.title ?? deriveJobTitle(request.task);
@@ -163,6 +224,9 @@ export async function startJob(
     ...(workflowStep && { workflowId: workflowStep.workflowId })
   });
   const jobDir = join(JOB_ROOT, id);
+  // The adapter that takes its task over stdin owns that frame's format; an
+  // adapter without one keeps today's argv prompt and a closed stdin.
+  const stdinPrompt = adapter.stdinPrompt?.(validRequest);
   // Anything failing between "running" and a live process must not leave the
   // job meta "running" forever.
   const spawnProcess = async () => {
@@ -187,7 +251,10 @@ export async function startJob(
         cwd: validRequest.workspace,
         env: adapter.environment(),
         shell: false,
-        stdio: ["ignore", "pipe", "pipe"]
+        // A stdin task frame means the channel stays open past the prompt, so
+        // it must be a pipe; otherwise nothing is ever written and "ignore"
+        // keeps the child from inheriting the runner's stdin.
+        stdio: [stdinPrompt === undefined ? "ignore" : "pipe", "pipe", "pipe"]
       });
     } catch (error) {
       if (jobMeta.get(id)?.status === "running") markJobFinished(id, "errored");
@@ -195,12 +262,87 @@ export async function startJob(
     }
   };
   const proc = await spawnProcess();
+  const stdin = stdinPrompt === undefined ? undefined : proc.stdin ?? undefined;
+  // Natural-completion teardown closes the channel before the process is gone,
+  // so the "are we past settle?" flag is declared before the stdin wiring that
+  // reads it.
+  let inputClosed = false;
+  // A stdin write that fails while the job is still open (EPIPE: the child
+  // closed its end) means steering is unreachable from then on, and a cap
+  // stop can no longer travel over the channel. Post-settle EPIPE (we ended
+  // the channel ourselves) is the expected outcome and stays silent.
+  //
+  // Classified per WRITE, not on error-arrival time: a write issued before the
+  // run settled can report its error only after runSettled closed the channel,
+  // and that failure still means the channel broke mid-run.
+  let stdinError: string | undefined;
+  const stdinBroken = () => stdinError !== undefined;
+  const recordStdinError = (error: Error, writtenBeforeSettle: boolean) => {
+    if (!stdin || stdinBroken()) return;
+    if (inputClosed && !writtenBeforeSettle) return;
+    stdinError = error.message;
+    // Destroying the stream makes the breakage visible where it matters:
+    // steerJob rejects on a destroyed channel instead of reporting delivery.
+    stdin.destroy();
+    // A cap stop whose frame never reached the child must still end the run.
+    if (cappedAt !== undefined) stopProcess();
+  };
+  const writeStdin = (frame: string) => {
+    if (!stdin) return;
+    const writtenBeforeSettle = !inputClosed;
+    stdin.write(frame, (error) => {
+      if (error) recordStdinError(error, writtenBeforeSettle);
+    });
+  };
+  if (stdin && stdinPrompt !== undefined) {
+    stdin.on("error", (error) => {
+      // Covers an EPIPE that no write callback claimed; the per-write callback
+      // above already classified the write that caused it.
+      recordStdinError(error, false);
+    });
+    writeStdin(stdinPrompt);
+  }
   const startedAt = Date.now();
   let forceKillTimeout: NodeJS.Timeout | undefined;
   const stopProcess = () => {
     proc.kill("SIGTERM");
-    forceKillTimeout ??= setTimeout(() => proc.kill("SIGKILL"), 5_000);
+    forceKillTimeout ??= setTimeout(() => proc.kill("SIGKILL"), GRACE_MS);
     forceKillTimeout.unref();
+  };
+
+  // Natural-completion teardown: once the run is verifiably over the channel
+  // is closed, which is the CLI's own orderly-shutdown signal. A child that
+  // ignores it must not linger, so the existing escalation backs the wait up.
+  let graceTimeout: NodeJS.Timeout | undefined;
+  let sawRunSettled = false;
+  const closeInputThenEscalate = () => {
+    if (inputClosed || !stdin) return;
+    inputClosed = true;
+    stdin.end();
+    graceTimeout = setTimeout(stopProcess, GRACE_MS);
+    graceTimeout.unref();
+  };
+
+  // Turn cap. The runner's own count of turnStart events is the authority — a
+  // CLI's native cap re-arms per queued stdin message, so it cannot bound the
+  // whole run. Reaching the cap asks the CLI to abandon the run over its own
+  // command channel, which keeps the CLI's teardown (final turn bookkeeping)
+  // intact; then the job finalizes like any other stop, as "cancelled". The
+  // escalation wired to runSettled (and runTimeoutMs as the backstop) still
+  // covers a child that ignores the request.
+  // The caller's cap wins; config.maxTurns is the optional default (validated
+  // at load). Absent in both = unlimited, so the cap stays undefined.
+  const maxTurns = resolveMaxTurns(validRequest, config);
+  let turnsSeen = 0;
+  let cappedAt: number | undefined;
+  const capStop = () => {
+    if (cappedAt !== undefined || maxTurns === undefined) return;
+    cappedAt = maxTurns;
+    markJobFinished(id, "cancelled");
+    void logJobEvent("cancelled", { id, model: request.model, detail: `maxTurns=${maxTurns} reached` });
+    const frame = adapter.capStopFrame?.();
+    if (frame !== undefined && stdin && !stdinBroken()) writeStdin(frame);
+    else stopProcess();
   };
 
   let previewText = "";
@@ -249,7 +391,7 @@ export async function startJob(
     return toolStartedAt !== undefined ? Date.now() - toolStartedAt : undefined;
   };
   const consumeLine = (line: string) => {
-    for (const event of adapter.parseLine(line)) {
+    for (const event of adapter.parseLine(line, parseState)) {
       applyModalEvent(jobUI, id, event, toolDurationFallback);
       switch (event.kind) {
         case "permissionDenied":
@@ -295,8 +437,31 @@ export async function startJob(
           lastPreviewLine = truncate(`Using ${event.name}…`, MAX_PREVIEW_LINE_LENGTH);
           emitPreview();
           break;
+        case "runSettled":
+          sawRunSettled = true;
+          // The CLI has no automatic work left, so the run takes no more
+          // steering: a frame written after this point would be queued but
+          // never delivered, and the job's result must never race it. Marking
+          // the job finalizing makes resolveOwnedJob reject it from here on.
+          // The channel itself closes below; finalization still waits for the
+          // process to close, never for the result line alone.
+          const job = jobs.get(id);
+          if (job) job.status = "finalizing";
+          break;
+        case "turnStart":
+          turnsSeen++;
+          // Strictly greater: the maxTurns-th turn is the one the caller paid
+          // for; the turn after it is the runaway one to stop.
+          if (maxTurns !== undefined && turnsSeen > maxTurns && cappedAt === undefined) capStop();
+          break;
       }
     }
+    // A settled run is over by the CLI's own account, so its channel can be
+    // closed — and closing is what lets these CLIs exit. Gated on settle, not
+    // on a result: a failed turn settles too, and under rpc a child would
+    // otherwise sit waiting for a command that never comes until the timeout.
+    // Closing is safe either way: EOF ends the input, not the output stream.
+    if (sawRunSettled) closeInputThenEscalate();
   };
   const output = createOutputCapture(
     proc,
@@ -314,6 +479,7 @@ export async function startJob(
   }, runTimeoutMs);
   jobs.set(id, {
     process: proc,
+    stdin,
     timeout,
     stop: stopProcess,
     // Also re-resolved: a replacement can land during the mkdir/spawn awaits.
@@ -349,6 +515,7 @@ export async function startJob(
     jobFinished = true;
     clearTimeout(timeout);
     clearTimeout(forceKillTimeout);
+    clearTimeout(graceTimeout);
     clearInterval(statusInterval);
     void logJobEvent(event, { id, model: request.model, detail });
     const job = jobs.get(id);
@@ -433,9 +600,11 @@ export async function startJob(
       // so anything else is "errored" — except a cancellation, which
       // cancel_pi_minion / workflow stopStep already recorded as
       // "cancelled" before killing the process; don't overwrite it here.
+      // A cap-stopped run is never "done": stopping it was the point.
       clean =
         code === 0 &&
         !timedOut &&
+        cappedAt === undefined &&
         !output.exceededOutputLimit &&
         !outputError &&
         finalResult !== undefined;
@@ -461,7 +630,13 @@ export async function startJob(
             });
       const result = buildResult(resultForDisplay);
       const contextResult = resultForContext === resultForDisplay ? result : buildResult(resultForContext);
-      if (!clean) failureReason = result;
+      // Why the run ended when the caller's own cap is the reason — the
+      // generic "no result" wording would otherwise blame the CLI.
+      const capNote =
+        cappedAt !== undefined
+          ? `\n\n**Note:** maxTurns=${cappedAt} reached — the run hit its turn cap and was cancelled.`
+          : "";
+      if (!clean) failureReason = `${result}${capNote}`;
       try {
         // Best-effort, like result.md: a failed session write mustn't lose the result.
         writeChildSession({
@@ -496,11 +671,14 @@ export async function startJob(
         const note = onFinalResult?.(finalResult);
         if (note) finalNote = `\n\n**Schedule stopped:** ${note}`;
       } catch {}
-      const header = `${frontmatter(reportPath)}${denialWarning}${capabilityNotices}${modelListNote}`;
+      const header = `${frontmatter(reportPath)}${denialWarning}${capabilityNotices}${modelListNote}${capNote}`;
+      const stdinWarning = stdinError
+        ? `\n\n**Warning:** the job's stdin channel broke mid-run (${stdinError}) — steering messages after that point were rejected.`
+        : "";
       const zeroCap = (config.maxResultContextBytes ?? DEFAULT_MAX_RESULT_CONTEXT_BYTES) <= 0;
       const readHint = reportPath && !zeroCap ? "\n\nIf you need more detail, see the report linked above and any files it references." : "";
       postResult(
-        `${header}\n\n${contextResult}${readHint}${finalNote}\n\n---`,
+        `${header}${stdinWarning}\n\n${contextResult}${readHint}${finalNote}\n\n---`,
         {
           id,
           code,
@@ -510,7 +688,7 @@ export async function startJob(
           ...usageFields(finalUsage)
         },
         !onFinalResult || finalNote !== "",
-        `${header}\n\n${result}${finalNote}\n\n---`
+        `${header}${stdinWarning}\n\n${result}${finalNote}\n\n---`
       );
     } finally {
       settle({ finalResult, reportPath, ok: clean, errorReason: failureReason });

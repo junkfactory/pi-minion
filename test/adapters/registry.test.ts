@@ -14,6 +14,7 @@ import type { MinionConfig } from "../../src/adapters/types.js";
 import { createClaudeAdapter } from "../../src/adapters/claude.js";
 import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../../src/adapters/agy.js";
 import { createPiAdapter, setModelRegistry } from "../../src/adapters/pi.js";
+import { createFmAdapter } from "../../src/adapters/fm.js";
 import { fakeConfig, fakeModelRegistry } from "../fakes.js";
 
 // ownsModel routes against the captured catalogs — seed fakes for this file
@@ -97,6 +98,33 @@ describe("empty registry (before ensure/pin)", () => {
 
   it("getAdapter throws for every name", () => {
     assert.throws(() => getAdapter("claude"), /Unknown agentCli "claude"/);
+  });
+});
+
+describe("turn-event capabilities", () => {
+  // Per-adapter declaration of what each CLI's stream can actually signal, so
+  // an unsupported capability is reported rather than silently missing.
+  it("declares emitsTurnEvents and where runSettled comes from", () => {
+    const declared = (adapter: { capabilities: { emitsTurnEvents?: boolean; runSettledSource?: string } }) => ({
+      emitsTurnEvents: adapter.capabilities.emitsTurnEvents,
+      runSettledSource: adapter.capabilities.runSettledSource
+    });
+    assert.deepEqual(declared(createClaudeAdapter(PERMISSIVE)), {
+      emitsTurnEvents: true,
+      runSettledSource: "event"
+    });
+    assert.deepEqual(declared(createPiAdapter(PERMISSIVE)), {
+      emitsTurnEvents: true,
+      runSettledSource: "event"
+    });
+    assert.deepEqual(declared(createAgyAdapter(PERMISSIVE)), {
+      emitsTurnEvents: true,
+      runSettledSource: "endOfStream"
+    });
+    assert.deepEqual(declared(createFmAdapter(PERMISSIVE)), {
+      emitsTurnEvents: true,
+      runSettledSource: "endOfStream"
+    });
   });
 });
 

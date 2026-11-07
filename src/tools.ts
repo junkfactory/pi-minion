@@ -5,14 +5,20 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Cron } from "croner";
 import { Type, type Static } from "typebox";
-import type { AgentCliAdapter, MinionConfig } from "./adapters/types.js";
+import type { AgentCliAdapter, MinionConfig, MinionRequest } from "./adapters/types.js";
 import {
   ensureRegistry,
   getAdapter,
   listAdapterNames,
   listAdapters
 } from "./adapters/registry.js";
-import { DEFAULT_MAX_RESULT_PREVIEW_BYTES, loadConfig, readPromptConfigSync } from "./config.js";
+import {
+  DEFAULT_MAX_RESULT_PREVIEW_BYTES,
+  MAX_MAX_TURNS,
+  MIN_MAX_TURNS,
+  loadConfig,
+  readPromptConfigSync
+} from "./config.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
 import { glyph } from "./glyphs.js";
@@ -27,6 +33,7 @@ import {
   peekJobUI,
   relevantJobsForSession,
   resolveOwnedJob,
+  steerJob,
   stopJob
 } from "./job-store.js";
 import { logJobEvent } from "./log.js";
@@ -61,6 +68,7 @@ import {
   isWorkflowRunning,
   validateScheduledWorkflowGraph,
   validateWorkflowGraph,
+  validateWorkflowMaxTurns,
   workflowBudget,
   workflowIdsOwnedBySession,
   workflowStatus,
@@ -92,6 +100,8 @@ export const PI_MINION_USAGE_NOTES = [
   "All other pi-minion tools are registered but deferred — hidden from the prompt by default. Call `tool_search` (e.g. `tool_search({ query: 'pi_minion' })`) to discover and activate them on demand. Surface `tool_search` itself with `{\"defaultTools\": [\"+tool_search\"]}` in pi's settings, the `-t +tool_search` CLI flag, or by naming it directly in `defaultTools`; a project-scoped `.pi/settings.json` overrides this per project.",
   "For long-result tasks, tell the minion to lead with a concise TLDR — the posted summary may be truncated. For follow-ups, read the relevant sections of the prior report (list_pi_minions gives its reportPath) instead of reconstructing findings from memory.",
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
+  "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
+  "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default, and with neither the run is unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
   "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
@@ -121,6 +131,14 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
       description:
         "Wall-clock limit in ms (run stops when it elapses); help_pi_minion prints the config default."
     })
+  ),
+  maxTurns: Type.Optional(
+    Type.Integer({
+      minimum: MIN_MAX_TURNS,
+      maximum: MAX_MAX_TURNS,
+      description:
+        'Optional cap on assistant turns, 1..100000 (both bounds enforced): the run is cancelled as soon as turn N+1 begins, with a "maxTurns=N reached" note. Omitted = no cap of its own; the config maxTurns applies when set, otherwise the run is unlimited. A schedule pins that config default — or no cap — when it is created, so a later config edit never retargets it.'
+    })
   )
 });
 
@@ -130,6 +148,21 @@ export const SCHEDULE_PI_MINION_PARAMETERS = Type.Object({
     description:
       'Cron expression in local time — 5 fields (minute hour day-of-month month day-of-week) or 6 with leading seconds, e.g. "0 9 * * 1-5".'
   })
+});
+
+export const STEER_PI_MINION_PARAMETERS = Type.Object({
+  id: Type.String({
+    description: "The id of a still-running pi-minion job started by run_pi_minion."
+  }),
+  message: Type.String({
+    description: "The steering instruction or extra context to deliver — self-contained, since the job cannot ask back."
+  }),
+  deliverAs: Type.Optional(
+    Type.Union([Type.Literal("steer"), Type.Literal("followUp")], {
+      description:
+        'When to deliver: "steer" (default) lands after the current turn\'s tool calls, before the next model call; "followUp" waits until the agent has no work left.'
+    })
+  )
 });
 
 export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
@@ -145,6 +178,13 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
   ),
   timeoutMs: Type.Optional(
     Type.Number({ description: "Default per-step wall-clock limit in ms; a step's own timeoutMs overrides it." })
+  ),
+  maxTurns: Type.Optional(
+    Type.Integer({
+      minimum: MIN_MAX_TURNS,
+      maximum: MAX_MAX_TURNS,
+      description: "Default per-step turn cap, 1..100000 (both bounds enforced); a step resolves its own maxTurns, then this value, then the config maxTurns — unlimited when all are absent."
+    })
   ),
   steps: Type.Array(
     Type.Object({
@@ -177,6 +217,14 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
           description:
             "Wall-clock limit for this step in ms; overrides the workflow default."
         })
+      ),
+      maxTurns: Type.Optional(
+        Type.Integer({
+          minimum: MIN_MAX_TURNS,
+          maximum: MAX_MAX_TURNS,
+          description:
+            "Turn cap for this step, 1..100000 (both bounds enforced); resolves this value, then the workflow default, then the config maxTurns — unlimited when all are absent."
+        })
       )
     }),
     { minItems: 1, maxItems: MAX_WORKFLOW_STEPS }
@@ -198,6 +246,10 @@ export async function validateWorkflowSteps(
 ): Promise<void> {
   await ensureRegistry(config);
   validateWorkflowGraph(request.steps);
+  // The workflow-level cap is checked on its own: a step that resolves to a
+  // valid value (its own override, or the config default) must not hide an
+  // invalid workflow-level one.
+  validateWorkflowMaxTurns(request);
   for (const step of request.steps) {
     try {
       await validateRequest(
@@ -208,6 +260,7 @@ export async function validateWorkflowSteps(
           context: request.context,
           maxBudgetUsd: step.maxBudgetUsd ?? request.maxBudgetUsd,
           timeoutMs: step.timeoutMs ?? request.timeoutMs,
+          maxTurns: step.maxTurns ?? request.maxTurns,
           workspace: cwd
         },
         cwd,
@@ -217,6 +270,22 @@ export async function validateWorkflowSteps(
       throw new Error(`Step "${step.id}": ${(error as Error).message}`);
     }
   }
+}
+
+// timeoutMs and maxTurns are pinned at creation so every tick runs under the
+// limit and cap the user scheduled, not whatever pi-minion.json says by then.
+// maxTurns pins the explicit "no cap" sentinel (null) when neither the request
+// nor the config names one: leaving it undefined would let a tick pick up a
+// config.maxTurns set later.
+export function pinScheduleRequest(
+  request: MinionRequest,
+  config: Pick<MinionConfig, "timeoutMs" | "maxTurns">
+): MinionRequest {
+  return {
+    ...request,
+    timeoutMs: request.timeoutMs ?? config.timeoutMs,
+    maxTurns: request.maxTurns ?? config.maxTurns ?? null
+  };
 }
 
 // Steps read the workflow's session, not the registering call's: rehomeWorkflows
@@ -441,6 +510,37 @@ export function registerTools(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
+    name: "steer_pi_minion",
+    exposure: "deferred",
+    label: "Steer Pi Minion",
+    description:
+      "Send a message to a still-running pi-minion job: `steer` redirects it at the next turn boundary, `followUp` adds context after its current work. Only this session's running pi and claude jobs accept steering, so a settled or unsupported job rejects the message.",
+    promptSnippet: "Steer a running pi-minion job mid-run",
+    promptGuidelines: [
+      "Steer only when the user changes direction mid-run; a finished job rejects the message — launch a follow-up run instead."
+    ],
+    parameters: STEER_PI_MINION_PARAMETERS,
+    async execute(_toolCallId, request, _signal, _onUpdate, ctx) {
+      if (!request.message.trim()) {
+        return textResult(
+          "message is required — send the exact steering instruction the job should act on.",
+          { id: request.id, delivered: false }
+        );
+      }
+      const deliverAs = request.deliverAs ?? "steer";
+      try {
+        await steerJob(request.id, ctx.sessionManager.getSessionId(), request.message, deliverAs);
+      } catch (error) {
+        return textResult((error as Error).message, { id: request.id, delivered: false });
+      }
+      return textResult(
+        `Pi minion job ${request.id} received the ${deliverAs} message.`,
+        { id: request.id, delivered: true, deliverAs }
+      );
+    }
+  });
+
+  pi.registerTool({
     name: "list_pi_minions",
     exposure: "deferred",
     label: "List Pi Minions",
@@ -543,9 +643,7 @@ export function registerTools(pi: ExtensionAPI): void {
       schedules.set(id, {
         title,
         cron,
-        // timeoutMs pinned now: every tick runs under the limit the user
-        // scheduled, not whatever pi-minion.json says by then.
-        request: { ...request, timeoutMs: request.timeoutMs ?? config.timeoutMs },
+        request: pinScheduleRequest(request, config),
         effort: request.effort,
         cwd: ctx.cwd,
         sessionId,
@@ -848,7 +946,7 @@ export function registerTools(pi: ExtensionAPI): void {
     promptSnippet: "List usable pi-minion models and usage examples",
     promptGuidelines: [
       "Call this tool FIRST whenever the user asks to delegate, run a task in the background, or use a minion — it lists every model actually installed on this machine and the usage notes the agent needs before calling `run_pi_minion` or `run_pi_minion_workflow`.",
-      "The remaining 10 pi-minion tools (run_pi_minion, cancel_pi_minion, list_pi_minions, run_pi_minion_workflow, schedule_pi_minion, list_pi_minion_schedules, cancel_pi_minion_schedule, schedule_pi_minion_workflow, list_pi_minion_workflows, cancel_pi_minion_workflow) are deferred — call `tool_search({ query: 'pi_minion' })` to discover and activate them on demand.",
+      "The remaining 11 pi-minion tools (run_pi_minion, cancel_pi_minion, steer_pi_minion, list_pi_minions, run_pi_minion_workflow, schedule_pi_minion, list_pi_minion_schedules, cancel_pi_minion_schedule, schedule_pi_minion_workflow, list_pi_minion_workflows, cancel_pi_minion_workflow) are deferred — call `tool_search({ query: 'pi_minion' })` to discover and activate them on demand.",
       "Surface `tool_search` itself with `{\"defaultTools\": [\"+tool_search\"]}` in pi's settings, the `-t +tool_search` CLI flag, or by naming it directly in `defaultTools`; a project-scoped `.pi/settings.json` overrides this per project."
     ],
     parameters: Type.Object({}),
@@ -869,7 +967,8 @@ export function registerTools(pi: ExtensionAPI): void {
         modelRouting: formatRoutingTable(promptConfig.routingTable),
         defaults: {
           timeoutMs: config.timeoutMs,
-          maxBudgetUsd: config.maxBudgetUsd
+          maxBudgetUsd: config.maxBudgetUsd,
+          maxTurns: config.maxTurns
         }
       };
       return textResult(JSON.stringify(payload, null, 2), payload);

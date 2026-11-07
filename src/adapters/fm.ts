@@ -206,7 +206,9 @@ export function environment(): NodeJS.ProcessEnv {
 
 // fm's structured output is a single JSON object on stdout. An empty
 // `result` deliberately emits no result event: job-runner then treats the run
-// as errored, which is correct — the model produced nothing.
+// as errored, which is correct — the model produced nothing. That one object
+// is also the whole run: its assistant message (turnStart) and its end of
+// output (runSettled), since a one-shot CLI has no earlier completion signal.
 export function parseLine(line: string): NormalizedEvent[] {
   const trimmed = line.trim();
   if (!trimmed) return [];
@@ -215,12 +217,18 @@ export function parseLine(line: string): NormalizedEvent[] {
     const parsed = JSON.parse(trimmed) as { result?: unknown };
     if (typeof parsed.result === "string" && parsed.result.length > 0) {
       return [
+        { kind: "turnStart" },
         { kind: "text", text: parsed.result },
-        { kind: "result", result: parsed.result }
+        { kind: "result", result: parsed.result },
+        { kind: "runSettled" }
       ];
     }
     if (typeof parsed.result === "string") {
-      return [{ kind: "text", text: "[Empty response from fm]" }];
+      return [
+        { kind: "turnStart" },
+        { kind: "text", text: "[Empty response from fm]" },
+        { kind: "runSettled" }
+      ];
     }
   } catch {
     // Not JSON: fall through to the plain-text path below.
@@ -265,7 +273,9 @@ export async function refreshCatalog(): Promise<void> {
 const capabilities: AdapterCapabilities = {
   supportsAllowedTools: false,
   supportsEffort: false,
-  supportsMaxBudgetUsd: false
+  supportsMaxBudgetUsd: false,
+  emitsTurnEvents: true,
+  runSettledSource: "endOfStream"
 };
 
 export function describeUnsupported(

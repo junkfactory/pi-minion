@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import type { Writable } from "node:stream";
 
 // Entry/message types this extension posts into the transcript.
 export const DISPLAY_ENTRY_TYPE = "pi-minion-display";
@@ -16,6 +17,11 @@ export type JobProcessStatus = "running" | "finalizing";
 
 export type MinionJob = {
   process: ChildProcess;
+  // The open command channel, set only for a steering-capable adapter (one
+  // that declares stdinPrompt): the initial task frame was written here and
+  // steering messages are appended to the same stream. Absent = argv prompt,
+  // no channel to steer.
+  stdin?: Writable;
   timeout: NodeJS.Timeout;
   stop: () => void;
   // The session that started this job. Extensions load once per process and

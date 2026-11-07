@@ -296,17 +296,21 @@ describe("getSchemaPath (bundled schema validation)", () => {
 });
 
 describe("parseLine", () => {
-  it("emits text and result for a non-empty structured result", () => {
+  it("emits turnStart, text, result and runSettled for a non-empty structured result", () => {
     assert.deepEqual(parseLine(JSON.stringify({ result: "The classification is positive." })), [
+      { kind: "turnStart" },
       { kind: "text", text: "The classification is positive." },
-      { kind: "result", result: "The classification is positive." }
+      { kind: "result", result: "The classification is positive." },
+      { kind: "runSettled" }
     ]);
   });
 
   it("tolerates surrounding whitespace on the JSON line", () => {
     assert.deepEqual(parseLine(`  ${JSON.stringify({ result: "OK" })}\n`), [
+      { kind: "turnStart" },
       { kind: "text", text: "OK" },
-      { kind: "result", result: "OK" }
+      { kind: "result", result: "OK" },
+      { kind: "runSettled" }
     ]);
   });
 
@@ -317,7 +321,11 @@ describe("parseLine", () => {
 
   it("emits no result event for an empty result — the job must error instead", () => {
     const events = parseLine(JSON.stringify({ result: "" }));
-    assert.deepEqual(events, [{ kind: "text", text: "[Empty response from fm]" }]);
+    assert.deepEqual(events, [
+      { kind: "turnStart" },
+      { kind: "text", text: "[Empty response from fm]" },
+      { kind: "runSettled" }
+    ]);
     assert.ok(!events.some((event) => event.kind === "result"));
   });
 
@@ -402,7 +410,9 @@ describe("capabilities", () => {
     assert.deepEqual(ungated.capabilities, {
       supportsAllowedTools: false,
       supportsEffort: false,
-      supportsMaxBudgetUsd: false
+      supportsMaxBudgetUsd: false,
+      emitsTurnEvents: true,
+      runSettledSource: "endOfStream"
     });
   });
 

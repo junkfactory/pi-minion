@@ -54,11 +54,12 @@ model vaguely, surface similar ids from that list for them to approve.
 
 ### Delegate a task
 
-**`run_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?)`** — spawn a
-background job. Spawns `claude -p --permission-mode auto ...` as a detached
-child process and returns a job ID immediately, so your session keeps working
-while the minion runs. The result arrives later as a transcript message plus a
-collapsible `pi-minion-display` entry.
+**`run_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
+maxTurns?)`** — spawn a background job. The adapter that owns the requested
+model runs it (`pi`, `claude`, `agy`, or `fm`, per the model registry), as a
+child process, and the call returns a job ID immediately, so your session
+keeps working while the minion runs. The result arrives later as a transcript
+message plus a collapsible `pi-minion-display` entry.
 
 - Deliberately no status/result-check tool: results are pushed to you. If you
   find pi-minion job IDs fed to a *different* extension's subagent tools
@@ -71,6 +72,12 @@ collapsible `pi-minion-display` entry.
 - `timeoutMs` is that run's wall-clock limit and overrides the config
   default; set it per task. An expired run reports "timed out before
   finishing" and points at the job's `stdout.json`.
+- `maxTurns` caps assistant turns for the run (a whole number from 1 to
+  100000). The tool param wins, then the config `maxTurns`; with neither, the
+  run has no turn cap. A run that reaches the cap is cancelled and its result
+  carries a `maxTurns=N reached` note. The cap is the runner's own turn count,
+  so it still bounds a CLI whose own `--max-turns` re-arms after a steering
+  message.
 - A clean-exit result is capped by `maxResultContextBytes` (default 4KB)
   and followed by the instruction "If you need more detail, see the report
   linked above and any files it references." (omitted when no `result.md`
@@ -81,6 +88,10 @@ collapsible `pi-minion-display` entry.
   `result.md` may itself be that summary rather than a complete report. The
   collapsible display entry is UI-only — pi never sends it to the model —
   and keeps the full `maxResultPreviewBytes` preview.
+- When the CLI verifiably finishes a run, the runner closes the child's
+  stdin — the CLIs' orderly-shutdown signal — and arms the usual
+  `SIGTERM`/`SIGKILL` escalation after a 5 s grace, so a child that ignores
+  EOF cannot linger.
 
 **`list_pi_minions()`** — list this session's jobs. Shows running and recently
 finished jobs in the current workspace with each job's `id`, `title`, `model`,
@@ -88,10 +99,22 @@ finished jobs in the current workspace with each job's `id`, `title`, `model`,
 compaction, or to find a finished job's `reportPath` before writing `context`
 for a follow-up task.
 
+**`steer_pi_minion(id, message, deliverAs?)`** — send a message to a
+still-running job of this session. `deliverAs` defaults to `"steer"`, which
+lands after the current turn's tool calls and before the next model call,
+redirecting the run; `"followUp"` queues the message as context for after
+the agent has no work left. The job cannot ask back, so make `message`
+self-contained. Only running `pi` and `claude` jobs support steering — agy
+and fm have no steering channel — and a job that has already settled (or
+whose stdin channel has closed) rejects the message. The tool reports the
+message as delivered only once the write to the child's channel is confirmed,
+so a channel that dies mid-run rejects instead of claiming delivery. Start a
+follow-up run instead of steering a finished job.
+
 ### Schedule jobs
 
 **`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
-cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
+maxTurns?, cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
 [croner](https://github.com/hexagon/croner)).
 
 - Each tick spawns an ordinary `run_pi_minion` job; its result posts to the
@@ -99,8 +122,13 @@ cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields,
   your next prompt). A spawn failure does start one.
 - A tick is skipped (logged `status=skipped`) while the previous run is still
   going.
-- It takes the same fields as `run_pi_minion`, `timeoutMs` included; every tick
-  uses the limit captured when the schedule was created.
+- It takes the same fields as `run_pi_minion`, `timeoutMs` and `maxTurns`
+  included (`maxTurns` is a whole number from 1 to 100000); every tick uses
+  the timeout and turn cap captured when the schedule was created. The cap
+  resolves the call's value, then the config default, and with neither the run
+  is pinned to no cap — editing `maxTurns` in `pi-minion.json` afterwards never
+  retargets an existing schedule. A run that reaches its cap is cancelled with
+  a `maxTurns=N reached` note.
 - A run can end its own schedule: it's told to finish its reply with
   `[[STOP_SCHEDULE]]` alone on the last line once the goal is fully complete.
   That result posts with a "Schedule stopped" note and does start a turn
@@ -115,10 +143,10 @@ workflow schedule).
 
 ### Run workflows
 
-**`run_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?, steps)`**
-— run a small dependency graph of minion jobs: `steps: [{ id, task, model,
-effort, dependsOn?, maxBudgetUsd?, timeoutMs? }]`, at most 10, up to 4 running
-at once. A step
+**`run_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?,
+maxTurns?, steps)`** — run a small dependency graph of minion jobs: `steps: [{
+id, task, model, effort, dependsOn?, maxBudgetUsd?, timeoutMs?, maxTurns? }]`,
+at most 10, up to 4 running at once. A step
 starts as soon as its `dependsOn` steps are done and receives their results.
 
 - A step's task inlines a dependency's output where it says
@@ -132,6 +160,11 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   on "No"; declining runs nothing, and a session without a UI refuses.
 - The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
   on pi, agy, or fm are marked "no cost ceiling" and counted separately.
+- `maxTurns` resolves per step, then the workflow-level value, then the config
+  default — unlimited when none is set. Like `timeoutMs`, the more specific
+  value wins; the cap and its `maxTurns=N reached` note work as on
+  `run_pi_minion`. A workflow-level `maxTurns` outside 1..100000 is rejected
+  even when every step overrides it.
 - Steps post no end-of-job message; one summary at the end (per-step
   status, model, `token_usage`, `cost_usd`, `reportPath`) starts a turn with
   each step's TLDR inlined — open the `reportPath` of the one step whose TLDR
@@ -155,9 +188,11 @@ session's workflows (status plus each step's `jobId` and `reportPath`), or
 cancel one: pending steps are cancelled, running steps are stopped, and the
 summary posts quietly.
 
-**`schedule_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?, steps,
-cron)`** — run `run_pi_minion_workflow` on a cron schedule. It takes the same
-fields as `run_pi_minion_workflow`.
+**`schedule_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?,
+maxTurns?, steps, cron)`** — run `run_pi_minion_workflow` on a cron schedule. It takes the same
+fields as `run_pi_minion_workflow` (`maxTurns` here is the per-step default,
+resolved step, then workflow-level, then the config default — a whole number
+from 1 to 100000, unlimited when all are absent).
 
 - The graph, every step, and the cron are checked once up front; the confirm
   dialog (which adds the cron, next run, and per-run budget) is the only
@@ -169,7 +204,9 @@ fields as `run_pi_minion_workflow`.
   abort happened, or no step succeeded, in which case it starts one and says
   so.
 - Each step's budget cap and timeout are fixed when the schedule is approved,
-  not re-read from `pi-minion.json` on later runs.
+  not re-read from `pi-minion.json` on later runs. A `maxTurns` set on the
+  step or workflow is pinned too; when both omit it, the run is pinned to no
+  cap, so a later config edit cannot start capping an approved schedule.
 - The workflow must have exactly one final step (one no other step depends
   on); only that step is told it can end the schedule with `[[STOP_SCHEDULE]]`
   — its summary posts with a "Schedule stopped" note and starts a turn
@@ -299,6 +336,7 @@ You can then prompt pi like
 | `allowedTools`            | yes                                                                                                     | Passed to the minion as `--allowedTools`; empty omits the flag.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `maxBudgetUsd`            | yes                                                                                                     | Default `--max-budget-usd`; the minion's cost ceiling. This config value is the default when a call omits `maxBudgetUsd`; the tool param overrides it per run or step.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `timeoutMs`               | yes                                                                                                     | Kill the minion (`SIGTERM`, then `SIGKILL` after 5s) if it runs this long. This config value is the default when a call omits `timeoutMs`; the tool param overrides it per run or step.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `maxTurns`                | no (unlimited)                                                                                          | Default cap on assistant turns per run, a whole number from 1 to 100000. The `run_pi_minion` param or a workflow step's `maxTurns` overrides it; a workflow-level `maxTurns` is the per-step default. Absent = unlimited. A run that reaches the cap is cancelled and its result carries a `maxTurns=N reached` note.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `pruneAfterDays`          | no (7)                                                                                                  | Job directories under `~/.pi/agent/pi-minion/` older than this are deleted at startup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `maxOutputBytes`          | no (15MB)                                                                                               | Disk/runaway backstop — kills the minion if its combined stdout+stderr exceeds this. Not a cost control; `maxBudgetUsd` covers that.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `maxResultPreviewBytes`   | no (50KB)                                                                                               | Caps how much of a clean-exit result the `pi-minion-display` entry shows, and how much of a dependency's result a workflow step inlines. Display entries are never sent to the model; the model-facing post is capped by `maxResultContextBytes`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

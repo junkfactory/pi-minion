@@ -29,6 +29,7 @@ import {
   workflowWidgetStatus,
   workflowBudget,
   unenforcedStepIds,
+  validateWorkflowMaxTurns,
   withEffectiveLimits,
   type MinionWorkflow,
   type WorkflowStepDef
@@ -304,6 +305,69 @@ describe("withEffectiveLimits", () => {
     assert.deepEqual(pinned.steps.map((step) => step.timeoutMs), [10, 2]);
     const noWorkflowTimeout = withEffectiveLimits({ title: "T", context: "c", steps: def({ id: "a" }) }, config);
     assert.equal(noWorkflowTimeout.steps[0].timeoutMs, 600_000);
+  });
+
+  it("pins step ?? workflow ?? config maxTurns into each step, and null when all are omitted", () => {
+    const pinned = withEffectiveLimits(
+      { title: "T", context: "c", maxTurns: 7, steps: def({ id: "a" }, { id: "b", maxTurns: 2 }) },
+      config
+    );
+    assert.deepEqual(pinned.steps.map((step) => step.maxTurns), [7, 2]);
+    const uncapped = withEffectiveLimits({ title: "T", context: "c", steps: def({ id: "a" }) }, config);
+    // Regression (F5): "no cap" is PINNED as null, not left undefined — an
+    // undefined cap let a later tick pick up a config.maxTurns set afterwards.
+    assert.equal(uncapped.maxTurns, null);
+    assert.equal(uncapped.steps[0].maxTurns, null);
+    // The config default is pinned too, like maxBudgetUsd and timeoutMs: a
+    // schedule's later runs keep the cap the user approved.
+    const fromConfig = withEffectiveLimits(
+      { title: "T", context: "c", steps: def({ id: "a" }, { id: "b", maxTurns: 2 }) },
+      { ...config, maxTurns: 9 }
+    );
+    assert.deepEqual(fromConfig.steps.map((step) => step.maxTurns), [9, 2]);
+    const workflowBeatsConfig = withEffectiveLimits(
+      { title: "T", context: "c", maxTurns: 7, steps: def({ id: "a" }) },
+      { ...config, maxTurns: 9 }
+    );
+    assert.equal(workflowBeatsConfig.steps[0].maxTurns, 7);
+  });
+
+  it("rejects an invalid workflow-level maxTurns even when every step overrides it", () => {
+    // Regression (F3): only the RESOLVED cap was validated, so a step's own
+    // maxTurns hid an invalid workflow-level value.
+    for (const maxTurns of [0, 100_001]) {
+      assert.throws(
+        () =>
+          withEffectiveLimits(
+            { title: "T", context: "c", maxTurns, steps: def({ id: "a", maxTurns: 1 }, { id: "b", maxTurns: 1 }) },
+            config
+          ),
+        /maxTurns must be a whole number from 1 to 100000/,
+        `workflow maxTurns=${maxTurns} should be rejected despite the step overrides`
+      );
+      assert.throws(
+        () => validateWorkflowMaxTurns({ maxTurns }),
+        /maxTurns must be a whole number from 1 to 100000/,
+        `workflow maxTurns=${maxTurns} should be rejected at validation`
+      );
+    }
+    assert.doesNotThrow(() => validateWorkflowMaxTurns({ maxTurns: 5 }));
+    assert.doesNotThrow(() => validateWorkflowMaxTurns({}));
+  });
+
+  it("rejects a step or workflow maxTurns outside 1..100000 at the store boundary", () => {
+    for (const maxTurns of [0, -1, 100_001, 1.5]) {
+      assert.throws(
+        () => withEffectiveLimits({ title: "T", context: "c", steps: def({ id: "a", maxTurns }) }, config),
+        /maxTurns must be a whole number from 1 to 100000/,
+        `step maxTurns=${maxTurns} should be rejected`
+      );
+      assert.throws(
+        () => withEffectiveLimits({ title: "T", context: "c", maxTurns, steps: def({ id: "a" }) }, config),
+        /maxTurns must be a whole number from 1 to 100000/,
+        `workflow maxTurns=${maxTurns} should be rejected`
+      );
+    }
   });
 
   it("shows each step's effective timeout as a compact duration in the confirm dialog", () => {

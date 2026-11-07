@@ -32,6 +32,10 @@ export type MinionConfig = {
   allowedTools: string[];
   maxBudgetUsd: number;
   timeoutMs: number;
+  // Optional turn cap applied to every run that omits MinionRequest.maxTurns;
+  // absent = unlimited (no constant default). Bounds 1..100000, validated at
+  // load like every other field. Absence stays undefined end to end.
+  maxTurns?: number;
   pruneAfterDays?: number;
   maxOutputBytes?: number;
   maxResultPreviewBytes?: number;
@@ -72,6 +76,15 @@ export type MinionRequest = {
   // Wall-clock limit for this run in milliseconds. Overrides config.timeoutMs
   // when set; validateRequest() rejects 0, negative, and non-finite values.
   timeoutMs?: number;
+  // Cap on assistant turns for this run. Omitted = unlimited (the default):
+  // an open-ended task shouldn't be cut short by a guess, so a cap is only
+  // imposed when the caller names one. validateRequest() rejects anything
+  // outside 1..100000. Enforced by the runner's own turn count, not by a
+  // CLI's native flag (claude's --max-turns re-arms per queued stdin frame).
+  // null = "pinned no cap": the cap was resolved when this request was built
+  // (a schedule pins step ?? workflow ?? config at creation), so the runner
+  // must NOT fall back to the then-current config.maxTurns.
+  maxTurns?: number | null;
 };
 
 export type ModelBreakdown = {
@@ -119,12 +132,47 @@ export type NormalizedEvent =
   | { kind: "thinking" }
   | { kind: "toolUse"; id: string; name: string; args?: Record<string, unknown> }
   | { kind: "toolUseArgs"; id: string; args: Record<string, unknown> }
-  | { kind: "toolResult"; id: string; durationMs?: number; output?: string; isError: boolean };
+  | { kind: "toolResult"; id: string; durationMs?: number; output?: string; isError: boolean }
+  // A new assistant turn started — the unit a turn cap counts and the
+  // boundary a steering channel queues against. No payload; the runner keeps
+  // its own count.
+  | { kind: "turnStart" }
+  // The child has no automatic work left (no retry, queued follow-up, or
+  // compaction retry pending) — completion, not merely the last result line.
+  // aborted is true only when the CLI says the run ended aborted; undefined
+  // when the adapter's CLI carries no such field.
+  | { kind: "runSettled"; aborted?: boolean };
+
+// Per-run scratch a parser may need to keep across stdout lines — the turnStart
+// dedupe both claude.ts (an assistant message id) and agy.ts (an agent_response
+// step index) use. The run's owner (job-runner.ts) creates one per job and threads
+// it through every parseLine call, so two concurrent jobs sharing a single
+// adapter instance never share parse state. Omitted (a replay of stored lines,
+// as modal.ts's backfill does) = no cross-line memory, which is safe because
+// no replayer counts turns.
+export type AdapterParseState = {
+  // The assistant response currently counted as the open turn (claude: the id
+  // of its assistant message, which the consolidated "assistant" line repeats;
+  // agy: the id of its agent_response step), cleared once that response reports
+  // DONE where the CLI says so.
+  openTurnId?: string;
+};
 
 export type AdapterCapabilities = {
   supportsAllowedTools: boolean;
   supportsEffort: boolean;
   supportsMaxBudgetUsd: boolean;
+  // Does this adapter emit turnStart for each assistant turn its CLI's stream
+  // exposes? Optional (false by omission) so a stand-in adapter — a test
+  // double or the no-op fallback for an unregistered job — declares nothing
+  // rather than claiming a turn boundary it never parses.
+  emitsTurnEvents?: boolean;
+  // Where runSettled comes from. "event": the CLI reports run completion
+  // itself (pi's agent_settled, claude's terminal result). "endOfStream":
+  // the CLI has no completion event, so the run is only verifiably over when
+  // its one-shot output ends — the adapter emits it on that terminal line.
+  // Undefined: never emitted.
+  runSettledSource?: "event" | "endOfStream";
 };
 
 // The boundary of the adapters/ subtree: this interface (plus the shared
@@ -186,8 +234,23 @@ export interface AgentCliAdapter {
   // cache). Optional — adapters with a static catalog omit it.
   refreshCatalog?(): Promise<void>;
   buildArgs(request: MinionRequest, config: MinionConfig): string[];
+  // The task frame this CLI reads from stdin, newline-terminated. Present =
+  // the runner spawns with stdin as a pipe, writes this line, and keeps the
+  // channel open for steering writes; absent = the task travels in argv (see
+  // buildArgs) and stdin stays closed. Owning the wire format here keeps
+  // job-runner.ts free of CLI-specific framing.
+  stdinPrompt?(request: MinionRequest): string;
+  // The command frame that makes this CLI abandon its in-flight run (the turn
+  // cap's stop). Absent = no command channel: the runner falls back to
+  // stopping the process by signal.
+  capStopFrame?(): string;
+  // A mid-run steering message as this CLI's own stdin frame. `steer` lands
+  // at the next turn boundary; `followUp` waits until the agent has no work
+  // left. Absent = this adapter has no steering channel and the caller must
+  // reject the request rather than guess a frame.
+  steerFrame?(message: string, deliverAs: "steer" | "followUp"): string;
   environment(): NodeJS.ProcessEnv;
-  parseLine(line: string): NormalizedEvent[];
+  parseLine(line: string, state?: AdapterParseState): NormalizedEvent[];
   // Non-fatal warnings for a request/config combination this adapter can't
   // honor (e.g. an effort value it has no flag for). [] when nothing needs
   // flagging.

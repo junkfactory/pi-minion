@@ -3,9 +3,12 @@ import { describe, it } from "node:test";
 import {
   buildArgs,
   createClaudeAdapter,
+  assistantTurnId,
   initModel,
+  isTerminalResult,
   isTextBlockStart,
   isThinkingDelta,
+  parseLine,
   rawOwnsModel,
   streamedMessageDeltaTokens,
   streamedResult,
@@ -13,7 +16,8 @@ import {
   streamedUsage,
   toolResults,
   toolUseArgs,
-  toolUseStarted
+  toolUseStarted,
+  userMessageFrame
 } from "../../src/adapters/claude.js";
 import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
 
@@ -86,6 +90,132 @@ describe("ownsModel / availableModels (config-gated)", () => {
       fakeConfig({ models: { allowed: [], blocked: [] }, providers: { allowed: [], blocked: ["claude"] } })
     );
     assert.deepEqual(adapter.availableModels(), []);
+  });
+});
+
+describe("assistantTurnId / isTerminalResult", () => {
+  it("takes the id from the stream_event that OPENS an assistant message", () => {
+    assert.deepEqual(
+      assistantTurnId(JSON.stringify({ type: "stream_event", event: { type: "message_start", message: { id: "msg_1" } } })),
+      { id: "msg_1", opens: true }
+    );
+    // The consolidated line for the same message repeats its id, without
+    // claiming to open the turn.
+    assert.deepEqual(assistantTurnId(JSON.stringify({ type: "assistant", message: { id: "msg_1", content: [] } })), {
+      id: "msg_1",
+      opens: false
+    });
+    assert.equal(isTerminalResult(JSON.stringify({ type: "result", subtype: "success" })), true);
+  });
+
+  it("falls back to a stable id when the line carries none", () => {
+    assert.deepEqual(assistantTurnId(JSON.stringify({ type: "assistant", message: { content: [] } })), {
+      id: "current",
+      opens: false
+    });
+    assert.deepEqual(
+      assistantTurnId(JSON.stringify({ type: "stream_event", event: { type: "message_start", message: {} } })),
+      { id: "current", opens: true }
+    );
+  });
+
+  it("ignores every other event type and malformed JSON", () => {
+    for (const line of [
+      JSON.stringify({ type: "user", message: { content: [] } }),
+      JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-5-5" }),
+      JSON.stringify({ type: "stream_event", event: { type: "text_delta", delta: { text: "hi" } } }),
+      JSON.stringify({ type: "stream_event", event: { type: "content_block_start", content_block: { type: "text" } } }),
+      "not json"
+    ]) {
+      assert.equal(assistantTurnId(line), undefined);
+      assert.equal(isTerminalResult(line), false);
+    }
+  });
+});
+
+describe("parseLine (turn boundaries)", () => {
+  const messageStart = (id: string) =>
+    JSON.stringify({ type: "stream_event", event: { type: "message_start", message: { id } } });
+  const assistant = (id: string, text: string) =>
+    JSON.stringify({ type: "assistant", message: { id, content: [{ type: "text", text }] } });
+
+  it("counts a turn at the message_start that opens it, not at its completion", () => {
+    const state = {};
+    // Regression (F1): the boundary used to be the consolidated assistant
+    // message, i.e. AFTER the turn streamed, so turn N+1 ran to completion
+    // before a cap counted it.
+    assert.deepEqual(parseLine(messageStart("msg_1"), state), [{ kind: "turnStart" }]);
+    // Streaming content for the same message is not a new turn.
+    assert.deepEqual(
+      parseLine(
+        JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } }),
+        state
+      ).filter((event) => event.kind === "turnStart"),
+      []
+    );
+    // Its completion repeats the id: exactly one turnStart for the response.
+    assert.deepEqual(
+      parseLine(assistant("msg_1", "hi"), state).filter((event) => event.kind === "turnStart"),
+      []
+    );
+    // The next message's opening event is the second turn.
+    assert.deepEqual(parseLine(messageStart("msg_2"), state), [{ kind: "turnStart" }]);
+  });
+
+  it("adopts the real id when an id-less opening event left the turn anonymous", () => {
+    // A message_start without message.id still opens the turn ("current"); its
+    // consolidated line naming msg_9 must UPDATE that turn, not count a second.
+    const state = {};
+    assert.deepEqual(
+      parseLine(JSON.stringify({ type: "stream_event", event: { type: "message_start", message: {} } }), state),
+      [{ kind: "turnStart" }]
+    );
+    assert.deepEqual(
+      parseLine(assistant("msg_9", "hi"), state).filter((event) => event.kind === "turnStart"),
+      []
+    );
+    assert.deepEqual(parseLine(messageStart("msg_10"), state), [{ kind: "turnStart" }]);
+  });
+
+  it("still counts a consolidated assistant message that arrives without a stream event", () => {
+    const state = {};
+    assert.deepEqual(parseLine(assistant("msg_1", "hi"), state), [{ kind: "turnStart" }]);
+    assert.deepEqual(parseLine(assistant("msg_2", "again"), state), [{ kind: "turnStart" }]);
+    // A replayed line (no parse state) always counts, as before.
+    assert.deepEqual(parseLine(assistant("msg_2", "again")), [{ kind: "turnStart" }]);
+  });
+
+  it("keeps the result and usage events on the terminal result line", () => {
+    const events = parseLine(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        result: "done",
+        total_cost_usd: 0.5,
+        usage: { input_tokens: 1, output_tokens: 2 }
+      })
+    );
+    assert.deepEqual(events.map((event) => event.kind), ["result", "usage", "runSettled"]);
+    assert.deepEqual(events[0], { kind: "result", result: "done" });
+  });
+
+  it("maps the terminal result to runSettled, including a failed run", () => {
+    const ok = parseLine(JSON.stringify({ type: "result", subtype: "success", result: "done" }));
+    assert.deepEqual(ok[0], { kind: "result", result: "done" });
+    assert.deepEqual(ok[ok.length - 1], { kind: "runSettled" });
+    const failed = parseLine(JSON.stringify({ type: "result", subtype: "error_max_turns", result: "" }));
+    assert.deepEqual(failed[failed.length - 1], { kind: "runSettled" });
+  });
+
+  it("emits neither event for a user message or a stream event", () => {
+    for (const line of [
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1" }] } }),
+      JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } })
+    ]) {
+      const kinds = parseLine(line).map((event) => event.kind);
+      assert.ok(!kinds.includes("turnStart"));
+      assert.ok(!kinds.includes("runSettled"));
+    }
   });
 });
 
@@ -459,7 +589,12 @@ describe("buildArgs", () => {
   it("omits optional flags when not requested", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     assert.ok(!args.includes("--allowedTools"));
-    assert.equal(args.at(-1), "Explore the repo");
+    // The task no longer rides in argv: it is the first stdin frame.
+    assert.ok(!args.includes("Explore the repo"));
+    assert.deepEqual(args.slice(args.indexOf("--input-format"), args.indexOf("--input-format") + 2), [
+      "--input-format",
+      "stream-json"
+    ]);
   });
 
   it("includes allowedTools and effort when present", () => {
@@ -475,9 +610,11 @@ describe("buildArgs", () => {
     assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), ["--effort", "high"]);
   });
 
-  it("appends context to the task text", () => {
-    const args = buildArgs(fakeRequest({ context: "some evidence" }), fakeConfig());
-    assert.equal(args.at(-1), "Explore the repo\n\nContext:\nsome evidence");
+  it("carries the task and its context in the stdin frame, not argv", () => {
+    const adapter = createClaudeAdapter(fakeConfig());
+    const frame = adapter.stdinPrompt?.(fakeRequest({ context: "some evidence" }));
+    assert.equal(frame, userMessageFrame("Explore the repo\n\nContext:\nsome evidence"));
+    assert.ok(!buildArgs(fakeRequest({ context: "some evidence" }), fakeConfig()).join(" ").includes("some evidence"));
   });
 
   it("falls back to config.maxBudgetUsd when the request omits an override", () => {
@@ -508,10 +645,45 @@ describe("buildArgs", () => {
     assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
-  it("spreads adapterArgs.claude just before the task positional", () => {
+  it("spreads adapterArgs.claude as the last argv entries", () => {
     const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { claude: { args: ["--strict-mcp-config"], preExec: [] } } }));
-    assert.equal(args.at(-1), "Explore the repo");
-    assert.equal(args.at(-2), "--strict-mcp-config");
+    assert.equal(args.at(-1), "--strict-mcp-config");
     assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--strict-mcp-config"));
+  });
+});
+
+describe("stdin channel frame", () => {
+  it("builds the SDK user-message frame as one newline-terminated JSON line", () => {
+    assert.equal(
+      userMessageFrame("do it"),
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "do it" }] },
+        parent_tool_use_id: null
+      })}\n`
+    );
+  });
+
+  it("marks a shouldQuery:false frame for context-only delivery", () => {
+    assert.deepEqual(JSON.parse(userMessageFrame("later", { shouldQuery: false })), {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "later" }] },
+      parent_tool_use_id: null,
+      shouldQuery: false
+    });
+    assert.equal("shouldQuery" in JSON.parse(userMessageFrame("now")), false);
+  });
+
+  it("exposes the interrupt cap frame and the steering frames through the interface", () => {
+    const adapter = createClaudeAdapter(fakeConfig());
+    const interrupt = JSON.parse(adapter.capStopFrame?.() ?? "");
+    assert.equal(interrupt.type, "control_request");
+    assert.equal(interrupt.subtype, "interrupt");
+    assert.equal(typeof interrupt.request_id, "string");
+    assert.ok(interrupt.request_id.length > 0);
+    // A fresh id per stop request keeps two interrupts on one channel apart.
+    assert.notEqual(JSON.parse(adapter.capStopFrame?.() ?? "").request_id, interrupt.request_id);
+    assert.equal(adapter.steerFrame?.("turn left", "steer"), userMessageFrame("turn left"));
+    assert.equal(adapter.steerFrame?.("then", "followUp"), userMessageFrame("then", { shouldQuery: false }));
   });
 });

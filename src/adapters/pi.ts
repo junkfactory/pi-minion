@@ -141,13 +141,14 @@ export function providersOf(model: string): string[] {
 }
 
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
-  // --mode json streams JSONL and exits once the prompt finishes (no -p
-  // needed). --no-extensions keeps the child from loading pi-minion itself
-  // (recursive minions) and any other user extension. "--" stops a task that
-  // starts with "-" from being parsed as a flag.
+  // --mode rpc streams the same JSONL events as --mode json and adds the
+  // stdin command channel, so the task itself travels over stdin (stdinPrompt
+  // below) instead of argv, and mid-run steering can be written to that same
+  // open channel. --no-extensions keeps the child from loading pi-minion
+  // itself (recursive minions) and any other user extension.
   return [
     "--mode",
-    "json",
+    "rpc",
     "--no-session",
     "--no-extensions",
     "--model",
@@ -156,10 +157,32 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     request.effort,
     "--append-system-prompt",
     MINION_PROMPT_BASE,
-    ...(config.adapterArgs?.pi?.args ?? []),
-    "--",
-    resolveTaskText(request)
+    ...(config.adapterArgs?.pi?.args ?? [])
   ];
+}
+
+// rpc-mode stdin commands, one newline-terminated JSON object per line. Each
+// line is acknowledged by a `{"type":"response","command":…}` record on
+// stdout — an ack, not an event (parseLine drops it). Verified against pi
+// 1.5.0: acks carry data.disposition "started" for a prompt and "queued" for
+// steer/follow_up, and agent_settled follows the run's last turn.
+export function promptFrame(message: string): string {
+  return `${JSON.stringify({ type: "prompt", message })}\n`;
+}
+
+// Delivered after the current assistant turn finishes its tool calls, before
+// the next model call.
+export function steerFrame(message: string): string {
+  return `${JSON.stringify({ type: "steer", message })}\n`;
+}
+
+// Delivered only once the agent has no more work to do.
+export function followUpFrame(message: string): string {
+  return `${JSON.stringify({ type: "follow_up", message })}\n`;
+}
+
+export function abortFrame(): string {
+  return `${JSON.stringify({ type: "abort" })}\n`;
 }
 
 export function environment(): NodeJS.ProcessEnv {
@@ -203,6 +226,8 @@ type PiEvent = {
   args?: unknown;
   result?: { content?: unknown };
   isError?: unknown;
+  // Set on agent_settled: true when the run ended because it was aborted.
+  aborted?: unknown;
 };
 
 // usage.reasoning is already included in output (per pi's message-types
@@ -273,7 +298,23 @@ export function parseLine(line: string): NormalizedEvent[] {
     return [];
   }
   const events: NormalizedEvent[] = [];
-  if (parsed.type === "message_update") {
+  // rpc mode acknowledges each stdin command with a `response` record. That is
+  // channel bookkeeping, not run progress: drop it here so the event path stays
+  // identical to --mode json's. queue_update snapshots (what is still queued)
+  // match no branch below either, so they yield no events for the same reason.
+  if (parsed.type === "response") return events;
+  if (parsed.type === "turn_start") {
+    // One assistant turn began: the unit a turn cap counts.
+    events.push({ kind: "turnStart" });
+  } else if (parsed.type === "agent_settled") {
+    // Pi is done with every automatic retry, compaction retry, and queued
+    // follow-up — the run is verifiably over. agent_end is NOT this signal
+    // (more work can still follow it); agent_settled is.
+    events.push({
+      kind: "runSettled",
+      aborted: typeof parsed.aborted === "boolean" ? parsed.aborted : undefined
+    });
+  } else if (parsed.type === "message_update") {
     const update = parsed.assistantMessageEvent;
     if (update?.type === "text_start") {
       events.push({ kind: "textBlockStart" });
@@ -337,7 +378,9 @@ export function parseLine(line: string): NormalizedEvent[] {
 const capabilities: AdapterCapabilities = {
   supportsAllowedTools: false,
   supportsEffort: true,
-  supportsMaxBudgetUsd: false
+  supportsMaxBudgetUsd: false,
+  emitsTurnEvents: true,
+  runSettledSource: "event"
 };
 
 export function describeUnsupported(_request: MinionRequest, _config: MinionConfig): string[] {
@@ -403,6 +446,10 @@ export function createPiAdapter(config: MinionConfig): AgentCliAdapter {
     providersOf,
     startSession: (ctx) => setModelRegistry(ctx.modelRegistry),
     buildArgs,
+    stdinPrompt: (request) => promptFrame(resolveTaskText(request)),
+    capStopFrame: abortFrame,
+    steerFrame: (message, deliverAs) =>
+      deliverAs === "followUp" ? followUpFrame(message) : steerFrame(message),
     environment,
     parseLine,
     describeUnsupported,

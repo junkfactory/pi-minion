@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type { MinionConfig } from "./adapters/types.js";
+import { MAX_MAX_TURNS, MIN_MAX_TURNS, isValidMaxTurns } from "./config.js";
 import { resolveAdapterForModel } from "./adapters/registry.js";
 import type {
   ConfirmLine,
@@ -33,6 +34,9 @@ export type WorkflowStepDef = {
   dependsOn?: string[];
   maxBudgetUsd?: number;
   timeoutMs?: number;
+  // Omitted = unlimited, like MinionRequest.maxTurns. null = a scheduled run's
+  // pinned "no cap" (see withEffectiveLimits).
+  maxTurns?: number | null;
 };
 
 export type WorkflowDef = {
@@ -40,6 +44,8 @@ export type WorkflowDef = {
   context: string;
   maxBudgetUsd?: number;
   timeoutMs?: number;
+  // Same null sentinel as WorkflowStepDef.maxTurns.
+  maxTurns?: number | null;
   steps: WorkflowStepDef[];
 };
 
@@ -60,6 +66,8 @@ export type MinionWorkflow = {
   context: string;
   maxBudgetUsd?: number;
   timeoutMs?: number;
+  // Same null sentinel as WorkflowDef.maxTurns.
+  maxTurns?: number | null;
   // pi-minion.json's maxResultPreviewBytes at creation.
   maxResultPreviewBytes: number;
   cwd: string;
@@ -94,6 +102,7 @@ export function newWorkflow(
     context: def.context,
     maxBudgetUsd: def.maxBudgetUsd,
     timeoutMs: def.timeoutMs,
+    maxTurns: def.maxTurns,
     ...env,
     steps: def.steps.map((step) => ({ ...step, dependsOn: step.dependsOn ?? [], status: "pending" as const })),
     startedAt: Date.now(),
@@ -229,6 +238,39 @@ function stepTimeout(
   return step.timeoutMs ?? def.timeoutMs ?? config.timeoutMs;
 }
 
+// step ?? workflow ?? config, like the budget and the timeout: a scheduled run
+// pins the config default too, so a later config edit cannot retarget it. The
+// resolved value is validated here (same bounds the runner enforces on a
+// request) rather than left for a tick to reject at spawn time.
+function stepMaxTurns(
+  step: Pick<WorkflowStepDef, "maxTurns">,
+  def: Pick<WorkflowDef, "maxTurns">,
+  config: Pick<MinionConfig, "maxTurns">
+): number | undefined {
+  validateWorkflowMaxTurns(def);
+  const maxTurns = step.maxTurns ?? def.maxTurns ?? config.maxTurns;
+  if (typeof maxTurns === "number" && !isValidMaxTurns(maxTurns)) {
+    throw new Error(
+      `maxTurns must be a whole number from ${MIN_MAX_TURNS} to ${MAX_MAX_TURNS} (omit it for no turn cap)`
+    );
+  }
+  return maxTurns ?? undefined;
+}
+
+// The workflow-level cap is validated on its own, not only through the value a
+// step resolves: a step's own maxTurns used to hide an invalid workflow-level
+// one, so the definition was accepted with a cap that could never be used.
+// Also the entry point for the run/validate path (tools.ts's
+// validateWorkflowSteps), which rejects an invalid workflow-level cap before any
+// step or dialog is reached.
+export function validateWorkflowMaxTurns(def: Pick<WorkflowDef, "maxTurns">): void {
+  if (typeof def.maxTurns === "number" && !isValidMaxTurns(def.maxTurns)) {
+    throw new Error(
+      `maxTurns must be a whole number from ${MIN_MAX_TURNS} to ${MAX_MAX_TURNS} (omit it for no turn cap)`
+    );
+  }
+}
+
 // pi and agy don't enforce maxBudgetUsd (adapter capabilities), so a step on
 // them has no real cost ceiling. An unresolvable model counts as enforced:
 // validation reports it before any dialog.
@@ -265,20 +307,27 @@ function formatBudgetCap(total: number, unenforced: number): string {
   return total > 0 ? `budget cap $${total.toFixed(2)} + ${steps}` : steps;
 }
 
-// Pins each step's effective cap and timeout (step, else workflow, else config)
-// into the definition, so a schedule's later runs use what the user approved
-// rather than whatever pi-minion.json says by then.
+// Pins each step's effective cap, timeout and turn limit (step, else workflow,
+// else config) into the definition, so a schedule's later runs use what the
+// user approved rather than whatever pi-minion.json says by then. A run with no
+// cap anywhere pins the explicit "no cap" sentinel (null) instead of leaving it
+// undefined, which would let a tick fall back to a config.maxTurns set later.
 export function withEffectiveLimits(
   def: WorkflowDef,
-  config: Pick<MinionConfig, "maxBudgetUsd" | "timeoutMs">
+  config: Pick<MinionConfig, "maxBudgetUsd" | "timeoutMs" | "maxTurns">
 ): WorkflowDef {
   return {
     ...def,
-    steps: def.steps.map((step) => ({
-      ...step,
-      maxBudgetUsd: stepBudget(step, def, config),
-      timeoutMs: stepTimeout(step, def, config)
-    }))
+    maxTurns: stepMaxTurns(def, def, config) ?? null,
+    steps: def.steps.map((step) => {
+      const maxTurns = stepMaxTurns(step, def, config);
+      return {
+        ...step,
+        maxBudgetUsd: stepBudget(step, def, config),
+        timeoutMs: stepTimeout(step, def, config),
+        maxTurns: maxTurns ?? null
+      };
+    })
   };
 }
 

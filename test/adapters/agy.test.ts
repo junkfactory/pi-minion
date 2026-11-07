@@ -387,12 +387,12 @@ describe("parseLine", () => {
     assert.deepEqual(parseLine(line), [{ kind: "model", model: "gpt-oss-120b" }]);
   });
 
-  it("extracts a text delta from an in-progress agent_response step", () => {
+  it("emits a text delta from an in-progress agent_response step, and its turnStart", () => {
     const line = JSON.stringify({
       event: "step_update",
       step_update: { step_index: 1, state: "ACTIVE", step_type: "agent_response", text_delta: "pong" }
     });
-    assert.deepEqual(parseLine(line), [{ kind: "text", text: "pong" }]);
+    assert.deepEqual(parseLine(line, {}), [{ kind: "text", text: "pong" }, { kind: "turnStart" }]);
   });
 
   it("emits a usageDelta when a DONE agent_response step carries usage, folding thinking into output", () => {
@@ -408,7 +408,8 @@ describe("parseLine", () => {
     });
     assert.deepEqual(parseLine(line), [
       { kind: "text", text: "\n" },
-      { kind: "usageDelta", delta: { input: 13328, output: 161, cacheWrite: 0, cacheRead: 0 } }
+      { kind: "usageDelta", delta: { input: 13328, output: 161, cacheWrite: 0, cacheRead: 0 } },
+      { kind: "turnStart" }
     ]);
   });
 
@@ -491,16 +492,60 @@ describe("parseLine", () => {
           cacheReadTokens: 5,
           perModel: []
         }
-      }
+      },
+      { kind: "runSettled" }
     ]);
   });
 
-  it("does not emit a result event on a failed status", () => {
+  it("does not emit a result event on a failed status, but still settles", () => {
     const line = JSON.stringify({
       event: "result",
       result: { status: "ERROR", response: "", error: "invalid model selection" }
     });
-    assert.deepEqual(parseLine(line), []);
+    assert.deepEqual(parseLine(line), [{ kind: "runSettled" }]);
+  });
+
+  it("emits one turnStart at an agent_response step's start, deduped by step_index", () => {
+    const state = {};
+    const active = (index: number, delta?: string) =>
+      parseLine(
+        JSON.stringify({
+          event: "step_update",
+          step_update: { step_index: index, state: "ACTIVE", step_type: "agent_response", text_delta: delta }
+        }),
+        state
+      );
+    // Start boundary: the response's first update counts its turn, so a
+    // response that never finishes still counts.
+    assert.deepEqual(active(3, "hi"), [{ kind: "text", text: "hi" }, { kind: "turnStart" }]);
+    // Later streaming updates for the same response do not count again.
+    assert.deepEqual(active(3, "there"), [{ kind: "text", text: "there" }]);
+    // DONE still reports the turn as complete, but never a second turnStart.
+    const done = parseLine(
+      JSON.stringify({
+        event: "step_update",
+        step_update: { step_index: 3, state: "DONE", step_type: "agent_response" }
+      }),
+      state
+    );
+    assert.deepEqual(done, []);
+    // The next assistant response is a new step_index: exactly one more turn.
+    assert.deepEqual(active(4, "next"), [{ kind: "text", text: "next" }, { kind: "turnStart" }]);
+  });
+
+  it("counts one turnStart for a response with no step_index, and one per distinct response after it", () => {
+    // Regression: the fixture below is a real stream with the step_index
+    // stripped. The fallback id ("current") must not swallow later turns —
+    // each response's DONE clears the open turn, so the next one counts again.
+    const state = {};
+    const step = (value: Record<string, unknown>) =>
+      parseLine(JSON.stringify({ event: "step_update", step_update: value }), state);
+    const response = (state_: string, delta: string) =>
+      step({ state: state_, step_type: "agent_response", text_delta: delta });
+    assert.deepEqual(response("ACTIVE", "first"), [{ kind: "text", text: "first" }, { kind: "turnStart" }]);
+    assert.deepEqual(response("ACTIVE", "still first"), [{ kind: "text", text: "still first" }]);
+    assert.deepEqual(response("DONE", ""), []);
+    assert.deepEqual(response("ACTIVE", "second"), [{ kind: "text", text: "second" }, { kind: "turnStart" }]);
   });
 
   it("emits permissionDenied when the terminal result carries denied_actions", () => {

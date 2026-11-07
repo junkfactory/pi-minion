@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import {
+  abortFrame,
   buildArgs,
   createPiAdapter,
   describePolicy,
   describeUnsupported,
   environment,
+  followUpFrame,
   parseLine,
+  promptFrame,
   rawOwnsModel,
-  setModelRegistry
+  setModelRegistry,
+  steerFrame
 } from "../../src/adapters/pi.js";
 import { fakeModelRegistry } from "../fakes.js";
 import type { MinionConfig, MinionRequest } from "../../src/adapters/types.js";
@@ -240,9 +244,9 @@ describe("rawOwnsModel / availableModels (config-gated)", () => {
 });
 
 describe("buildArgs", () => {
-  it("runs JSON mode ephemerally with no extensions", () => {
+  it("runs rpc mode ephemerally with no extensions", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
-    assert.equal(flagValue(args, "--mode"), "json");
+    assert.equal(flagValue(args, "--mode"), "rpc");
     assert.ok(args.includes("--no-session"));
     assert.ok(args.includes("--no-extensions"));
   });
@@ -276,10 +280,11 @@ describe("buildArgs", () => {
     assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
-  it("puts the task last, after -- so a leading dash isn't parsed as a flag", () => {
+  it("keeps the task out of argv — it travels over stdin instead", () => {
     const args = buildArgs(fakeRequest({ task: "-x do it", context: "some evidence" }), fakeConfig());
-    assert.equal(args[args.length - 2], "--");
-    assert.equal(args[args.length - 1], "-x do it\n\nContext:\nsome evidence");
+    assert.ok(!args.includes("--"));
+    assert.ok(!args.includes("-x do it"));
+    assert.ok(!args.join(" ").includes("some evidence"));
   });
 
   it("never emits --tools or a budget flag — allowedTools uses Claude tool names", () => {
@@ -288,10 +293,9 @@ describe("buildArgs", () => {
     assert.ok(!args.includes("--max-budget-usd"));
   });
 
-  it("spreads adapterArgs.pi just before the -- separator", () => {
+  it("spreads adapterArgs.pi as the last argv entries", () => {
     const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { pi: { args: ["--verbose"], preExec: [] } } }));
-    assert.equal(args[args.indexOf("--") - 1], "--verbose");
-    assert.equal(args[args.indexOf("--") + 1], "Explore the repo");
+    assert.equal(args.at(-1), "--verbose");
     assert.ok(!buildArgs(fakeRequest(), fakeConfig()).includes("--verbose"));
   });
 
@@ -303,6 +307,43 @@ describe("buildArgs", () => {
     assert.ok(!args.includes("env"));
     assert.ok(!args.includes("-u"));
     assert.ok(!args.includes("AWS_PROFILE"));
+  });
+});
+
+describe("stdin channel frames", () => {
+  // One newline-terminated JSON object per line, per pi's rpc docs; the
+  // capture against pi 1.5.0 --mode rpc confirmed the prompt frame is answered
+  // with a `{"type":"response",…}` ack and that steer/follow_up queue.
+  it("builds the prompt, steer, follow_up and abort commands", () => {
+    assert.equal(promptFrame("hi"), '{"type":"prompt","message":"hi"}\n');
+    assert.equal(steerFrame("stop"), '{"type":"steer","message":"stop"}\n');
+    assert.equal(followUpFrame("then"), '{"type":"follow_up","message":"then"}\n');
+    assert.equal(abortFrame(), '{"type":"abort"}\n');
+  });
+
+  it("escapes a message that would otherwise break the line framing", () => {
+    const line = promptFrame('line1\nline2 "quoted"');
+    assert.equal(line.trim().split("\n").length, 1);
+    assert.equal(JSON.parse(line).message, 'line1\nline2 "quoted"');
+  });
+
+  it("stdinPrompt carries the resolved task text, context included", () => {
+    const adapter = createPiAdapter(fakeConfig());
+    const frame = adapter.stdinPrompt?.({
+      task: "Explore the repo",
+      workspace: "/tmp/workspace",
+      model: "sonnet",
+      effort: "medium",
+      context: "some evidence"
+    });
+    assert.equal(frame, promptFrame("Explore the repo\n\nContext:\nsome evidence"));
+  });
+
+  it("exposes the cap-stop and steering frames through the adapter interface", () => {
+    const adapter = createPiAdapter(fakeConfig());
+    assert.equal(adapter.capStopFrame?.(), abortFrame());
+    assert.equal(adapter.steerFrame?.("stop", "steer"), steerFrame("stop"));
+    assert.equal(adapter.steerFrame?.("then", "followUp"), followUpFrame("then"));
   });
 });
 
@@ -360,10 +401,39 @@ const usage = (input: number, output: number, cacheRead: number, total: number) 
 });
 
 describe("parseLine", () => {
+  it("drops rpc channel records — they are acks, not events", () => {
+    // Captured from pi 1.5.0 --mode rpc: the first stdout line answers the
+    // prompt command, and a steer/follow_up is acknowledged after the run
+    // settled. Neither may reach the normalized event path.
+    assert.deepEqual(
+      parseLine(
+        JSON.stringify({ type: "response", command: "prompt", success: true, data: { disposition: "started" } })
+      ),
+      []
+    );
+    assert.deepEqual(
+      parseLine(JSON.stringify({ type: "queue_update", steering: ["also say: steered"], followUp: [] })),
+      []
+    );
+  });
+
   it("ignores malformed and unrelated lines", () => {
     assert.deepEqual(parseLine("not json"), []);
     assert.deepEqual(parseLine(JSON.stringify({ type: "session", version: 3, id: "x" })), []);
-    assert.deepEqual(parseLine(JSON.stringify({ type: "turn_start" })), []);
+    assert.deepEqual(parseLine(JSON.stringify({ type: "turn_end" })), []);
+  });
+
+  it("maps turn_start to turnStart and agent_settled to runSettled", () => {
+    assert.deepEqual(parseLine(JSON.stringify({ type: "turn_start" })), [{ kind: "turnStart" }]);
+    assert.deepEqual(parseLine(JSON.stringify({ type: "agent_settled", aborted: false })), [
+      { kind: "runSettled", aborted: false }
+    ]);
+    assert.deepEqual(parseLine(JSON.stringify({ type: "agent_settled", aborted: true })), [
+      { kind: "runSettled", aborted: true }
+    ]);
+    assert.deepEqual(parseLine(JSON.stringify({ type: "agent_settled" })), [
+      { kind: "runSettled", aborted: undefined }
+    ]);
   });
 
   it("maps streamed text and thinking updates", () => {

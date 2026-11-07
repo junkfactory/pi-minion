@@ -1,8 +1,8 @@
 # Troubleshooting
 
 For known failure modes (exit143 causes, the workspace-mismatch fix, jobs not appearing, output caps,
-extension load errors, and cross-extension tool confusion with
-`get_subagent_result`/`Agent`/`steer_subagent`).
+extension load errors, `steer_pi_minion` never appearing in `-ne` sessions, and
+cross-extension tool confusion with `get_subagent_result`/`Agent`/`steer_subagent`).
 
 **"Pi minion failed (exit 143)." with no other detail.**
 143 = 128 + SIGTERM: a killed `claude` process usually self-reports as a
@@ -205,3 +205,24 @@ directly (from the `offset` the notice names) for the rest. The collapsible
 the model — capped independently by `maxResultPreviewBytes` (default 50KB),
 so that display preview was never the cause of the model-facing notice. For
 deeper forensics, the raw CLI stream output is at `<jobDir>/stdout.json`.
+
+**`steer_pi_minion` (or `list_pi_minions`, `schedule_pi_minion`) never appears in the session's
+tool set, yet the extension itself loaded fine — `help_pi_minion` works, jobs run.**
+These tools are registered with `deferred` exposure: they activate only through
+`tool_search`, and `tool_search` is a built-in extension tool (not pi-minion code). A session
+launched with `-ne` (no extension discovery, no built-in extensions) therefore never registers
+`tool_search`, so the deferred tools have no activation path at all — and explicitly declaring
+them with `-t "+tool_search"` does nothing, because declaring a name can't register a tool that
+no extension exists to provide. The result looks like a pi-minion dependency problem but isn't.
+
+Fix at launch instead: with `-t` given only `+name`/`-name` entries (no plain names, which
+would replace the whole default selection), the wanted tools are declared directly and
+`tool_search` is unnecessary — `-t "+steer_pi_minion,+list_pi_minions,+schedule_pi_minion"`.
+This is per-process, so a `/reload` keeps it but a later `-ne` relaunch without the `-t`
+entries loses it again. Two related gotchas: (a) tools activated via `tool_search` earlier in a
+session persist across a `/reload`, so after adding a new deferred tool an already-running
+session looks fine for the old tools while the new one is missing — the `-ne`-no-`tool_search`
+age above then surfaces only for that newest tool; (b) launching without `-ne` but
+loading dev-mode via `-e` double-loads pi-minion (the installed `git:` package copy and the
+explicit `-e` dev copy both register, every tool name collides, load fails) — always pair a
+dev-mode `-e` load with `-ne`.

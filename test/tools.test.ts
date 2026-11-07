@@ -20,8 +20,11 @@ import {
   RUN_PI_MINION_WORKFLOW_PARAMETERS,
   SCHEDULE_PI_MINION_PARAMETERS,
   SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS,
+  STEER_PI_MINION_PARAMETERS,
+  pinScheduleRequest,
   registerTools
 } from "../src/tools.js";
+import { resolveMaxTurns } from "../src/job-runner.js";
 
 describe("adapter boundary", () => {
   // AgentCliAdapter (src/adapters/types.ts) is the only published surface
@@ -256,6 +259,35 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ timeoutMs: 300_000 })), true);
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ timeoutMs: "5m" })), false);
   });
+
+  it("accepts a maxTurns bounded 1..100000 and rejects anything outside it", () => {
+    for (const maxTurns of [1, 100_000]) {
+      assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ maxTurns })), true, `maxTurns=${maxTurns}`);
+    }
+    for (const maxTurns of [0, -1, 100_001, 2.5]) {
+      assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs({ maxTurns })), false, `maxTurns=${maxTurns} should fail`);
+    }
+  });
+
+  it("describes maxTurns with the enforced bounds and the real default chain", () => {
+    type Schema = { properties: Record<string, { description?: string }> };
+    const description = (schema: Schema) => schema.properties.maxTurns!.description ?? "";
+    const run = description(RUN_PI_MINION_PARAMETERS as Schema);
+    assert.match(run, /1\.\.100000/);
+    assert.match(run, /config maxTurns applies when set, otherwise the run is unlimited/);
+    assert.match(run, /maxTurns=N reached/);
+    const workflow = description(RUN_PI_MINION_WORKFLOW_PARAMETERS as Schema);
+    assert.match(workflow, /step resolves its own maxTurns, then this value, then the config maxTurns/);
+    assert.match(workflow, /unlimited when all are absent/);
+    const step = description(
+      (RUN_PI_MINION_WORKFLOW_PARAMETERS as unknown as { properties: { steps: { items: Schema } } }).properties
+        .steps.items
+    );
+    assert.match(step, /resolves this value, then the workflow default, then the config maxTurns/);
+    // Both schedule schemas reuse those descriptions verbatim.
+    assert.equal(description(SCHEDULE_PI_MINION_PARAMETERS as Schema), run);
+    assert.equal(description(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS as Schema), workflow);
+  });
 });
 
 describe("PI_MINION_EXAMPLES", () => {
@@ -268,6 +300,18 @@ describe("PI_MINION_EXAMPLES", () => {
         `README.md is missing the example prompt: "${example}"`
       );
     }
+  });
+});
+
+describe("STEER_PI_MINION_PARAMETERS", () => {
+  it("requires id and message and accepts only the two delivery modes", () => {
+    const call = { id: "job-1", message: "go left instead" };
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, call), true);
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, { ...call, deliverAs: "steer" }), true);
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, { ...call, deliverAs: "followUp" }), true);
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, { ...call, deliverAs: "later" }), false);
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, { id: "job-1" }), false);
+    assert.equal(Check(STEER_PI_MINION_PARAMETERS, { message: "go left" }), false);
   });
 });
 
@@ -309,6 +353,26 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
     );
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, timeoutMs: 600_000 }), true);
   });
+
+  it("accepts a step's own maxTurns and a workflow-level one, bounded 1..100000", () => {
+    assert.equal(
+      Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...args.steps[0], maxTurns: 5 }] }),
+      true
+    );
+    assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, maxTurns: 100_000 }), true);
+    for (const maxTurns of [0, -1, 100_001, 2.5]) {
+      assert.equal(
+        Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, maxTurns }),
+        false,
+        `workflow maxTurns=${maxTurns} should fail`
+      );
+      assert.equal(
+        Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...args.steps[0], maxTurns }] }),
+        false,
+        `step maxTurns=${maxTurns} should fail`
+      );
+    }
+  });
 });
 
 describe("SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS", () => {
@@ -336,6 +400,7 @@ describe("parameter schema shape", () => {
       "context",
       "effort",
       "maxBudgetUsd",
+      "maxTurns",
       "model",
       "task",
       "timeoutMs"
@@ -347,6 +412,7 @@ describe("parameter schema shape", () => {
     assert.deepEqual(keys(RUN_PI_MINION_WORKFLOW_PARAMETERS), [
       "context",
       "maxBudgetUsd",
+      "maxTurns",
       "steps",
       "timeoutMs",
       "title"
@@ -361,11 +427,17 @@ describe("parameter schema shape", () => {
       "effort",
       "id",
       "maxBudgetUsd",
+      "maxTurns",
       "model",
       "task",
       "timeoutMs"
     ]);
     assert.deepEqual(required(step), ["effort", "id", "model", "task"]);
+  });
+
+  it("pins the steer schema properties and required fields", () => {
+    assert.deepEqual(keys(STEER_PI_MINION_PARAMETERS), ["deliverAs", "id", "message"]);
+    assert.deepEqual(required(STEER_PI_MINION_PARAMETERS), ["id", "message"]);
   });
 
   it("pins the schedule schemas to the run/workflow fields plus cron", () => {
@@ -374,6 +446,7 @@ describe("parameter schema shape", () => {
       "cron",
       "effort",
       "maxBudgetUsd",
+      "maxTurns",
       "model",
       "task",
       "timeoutMs"
@@ -389,11 +462,38 @@ describe("parameter schema shape", () => {
       "context",
       "cron",
       "maxBudgetUsd",
+      "maxTurns",
       "steps",
       "timeoutMs",
       "title"
     ]);
     assert.deepEqual(required(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS), ["context", "cron", "steps", "title"]);
+  });
+});
+
+describe("schedule cap pinning", () => {
+  const base = { task: "t", workspace: "/w", model: "haiku", effort: "low" };
+
+  it("pins the config default at creation, so a later config edit cannot retarget the schedule", () => {
+    // Regression (F5): the tick used to resolve `request.maxTurns ?? config`
+    // against the config CURRENT at tick time.
+    const pinned = pinScheduleRequest(base, { timeoutMs: 1_000, maxTurns: 3 });
+    assert.equal(pinned.maxTurns, 3);
+    assert.equal(pinned.timeoutMs, 1_000);
+    // A running schedule's config was edited afterwards: the pinned cap wins.
+    assert.equal(resolveMaxTurns(pinned, { maxTurns: 99 }), 3);
+  });
+
+  it("pins an explicit no-cap, so a schedule created unlimited stays unlimited", () => {
+    const pinned = pinScheduleRequest(base, { timeoutMs: 1_000 });
+    assert.equal(pinned.maxTurns, null);
+    assert.equal(resolveMaxTurns(pinned, { maxTurns: 99 }), undefined);
+  });
+
+  it("keeps a request's own cap over the config default", () => {
+    const pinned = pinScheduleRequest({ ...base, maxTurns: 2 }, { timeoutMs: 1_000, maxTurns: 3 });
+    assert.equal(pinned.maxTurns, 2);
+    assert.equal(resolveMaxTurns(pinned, { maxTurns: 99 }), 2);
   });
 });
 
@@ -410,8 +510,8 @@ describe("registerTools prompt footprint", () => {
   const byName = new Map(registered.map((def) => [def.name, def]));
   const exposure = (name: string): string => byName.get(name)?.exposure ?? "direct";
 
-  it("registers all 11 tools and no others", () => {
-    assert.equal(registered.length, 11);
+  it("registers all 12 tools and no others", () => {
+    assert.equal(registered.length, 12);
     assert.deepEqual(
       [...byName.keys()].sort(),
       [
@@ -425,12 +525,13 @@ describe("registerTools prompt footprint", () => {
         "run_pi_minion",
         "run_pi_minion_workflow",
         "schedule_pi_minion",
-        "schedule_pi_minion_workflow"
+        "schedule_pi_minion_workflow",
+        "steer_pi_minion"
       ].sort()
     );
   });
 
-  it("defers 10 tools and keeps help_pi_minion direct", () => {
+  it("defers 11 tools and keeps help_pi_minion direct", () => {
     const deferred = [
       "cancel_pi_minion",
       "cancel_pi_minion_schedule",
@@ -441,7 +542,8 @@ describe("registerTools prompt footprint", () => {
       "run_pi_minion",
       "run_pi_minion_workflow",
       "schedule_pi_minion",
-      "schedule_pi_minion_workflow"
+      "schedule_pi_minion_workflow",
+      "steer_pi_minion"
     ];
     for (const name of deferred) assert.equal(exposure(name), "deferred", name);
     const help = registered.find((t: any) => t.name === "help_pi_minion");
@@ -480,13 +582,33 @@ describe("registerTools prompt footprint", () => {
       run_pi_minion: 12,
       run_pi_minion_workflow: 11,
       schedule_pi_minion: 1,
-      schedule_pi_minion_workflow: 1
+      schedule_pi_minion_workflow: 1,
+      steer_pi_minion: 1
     };
     for (const [name, count] of Object.entries(expected)) {
       const def = byName.get(name);
       assert.ok(def, `${name} is not registered`);
       assert.equal((def.promptGuidelines ?? []).length, count, `${name} promptGuidelines count`);
     }
+  });
+
+  it("steer_pi_minion validates args and reports a non-running job instead of throwing", async () => {
+    const steer = byName.get("steer_pi_minion");
+    assert.ok(steer, "steer_pi_minion is registered");
+    const call = (message: string, id = "job-missing") =>
+      steer.execute(
+        "call-steer",
+        { id, message },
+        undefined,
+        undefined,
+        { sessionManager: { getSessionId: () => "test-session" } } as unknown as ExtensionToolContext
+      );
+    const empty = await call("   ");
+    assert.equal((empty.details as { delivered: boolean }).delivered, false);
+    assert.match((empty.content[0] as { text: string }).text, /message is required/);
+    const missing = await call("go left");
+    assert.equal((missing.details as { delivered: boolean }).delivered, false);
+    assert.match((missing.content[0] as { text: string }).text, /No running pi minion job job-missing/);
   });
 
   it("help payload carries the model routing table", async () => {

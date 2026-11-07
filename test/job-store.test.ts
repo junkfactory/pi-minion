@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
+import { Writable } from "node:stream";
 import {
   bindSessionApi,
   holdPostsFor,
@@ -12,8 +13,12 @@ import {
   relevantJobsForSession,
   resolveOwnedJob,
   resolveSessionId,
-  sessionApi
+  sessionApi,
+  steerJob
 } from "../src/job-store.js";
+import { createClaudeAdapter } from "../src/adapters/claude.js";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { createFakeAdapter, fakeConfig } from "./fakes.js";
 import type { JobMetaEntry } from "../src/job-types.js";
 
 describe("jobIdsOwnedBySession", () => {
@@ -258,5 +263,148 @@ describe("posts during a session replacement", () => {
     const rebound = recorder();
     bindSessionApi("quit-1", rebound.pi);
     assert.equal(rebound.sent.length, 0);
+  });
+});
+
+describe("steerJob", () => {
+  afterEach(() => setAdaptersForTest());
+
+  function recordingStdin() {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(chunk.toString());
+        callback();
+      }
+    }) as Writable & { chunks: string[] };
+    stream.chunks = chunks;
+    return stream;
+  }
+
+  function runningJob(overrides: Record<string, unknown> = {}) {
+    const stdin = recordingStdin();
+    return {
+      stdin,
+      job: {
+        process: {},
+        stdin,
+        timeout: 0,
+        stop: () => {},
+        sessionId: "steer-session",
+        status: "running",
+        ...overrides
+      }
+    };
+  }
+
+  function register(id: string, job: unknown, model = "sonnet", sessionId = "steer-session") {
+    jobs.set(id, job as any);
+    jobMeta.set(id, fakeJobMetaEntry({ sessionId, model }));
+  }
+
+  function cleanup(id: string) {
+    jobs.delete(id);
+    jobMeta.delete(id);
+  }
+
+  it("writes the adapter's steer and followUp frames to a running job's stdin", async () => {
+    setAdaptersForTest([createClaudeAdapter(fakeConfig())]);
+    const id = "steer-running";
+    const { job, stdin } = runningJob();
+    register(id, job);
+    try {
+      await steerJob(id, "steer-session", "go left instead");
+      await steerJob(id, "steer-session", "then report", "followUp");
+      assert.equal(stdin.chunks.length, 2);
+      assert.deepEqual(JSON.parse(stdin.chunks[0]), {
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "go left instead" }] },
+        parent_tool_use_id: null
+      });
+      assert.equal(JSON.parse(stdin.chunks[1]).shouldQuery, false);
+      assert.equal(JSON.parse(stdin.chunks[1]).message.content[0].text, "then report");
+    } finally {
+      cleanup(id);
+    }
+  });
+
+  it("rejects a job this session does not own or one that already settled", async () => {
+    const id = "steer-gated";
+    const { job } = runningJob();
+    register(id, job);
+    try {
+      await assert.rejects(steerJob(id, "other-session", "hi"), /No running pi minion job steer-gated/);
+      jobs.get(id)!.status = "finalizing";
+      await assert.rejects(steerJob(id, "steer-session", "hi"), /No running pi minion job steer-gated/);
+      jobs.delete(id);
+      await assert.rejects(steerJob(id, "steer-session", "hi"), /No running pi minion job steer-gated/);
+    } finally {
+      cleanup(id);
+    }
+  });
+
+  it("rejects a running job whose channel is missing or already closed", async () => {
+    setAdaptersForTest([createClaudeAdapter(fakeConfig())]);
+    const id = "steer-no-channel";
+    const { job } = runningJob({ stdin: undefined });
+    register(id, job);
+    try {
+      await assert.rejects(steerJob(id, "steer-session", "hi"), /has no open steering channel/);
+    } finally {
+      cleanup(id);
+    }
+    const closedId = "steer-closed-channel";
+    const { job: closedJob, stdin } = runningJob();
+    stdin.end();
+    register(closedId, closedJob);
+    try {
+      await assert.rejects(steerJob(closedId, "steer-session", "hi"), /has no open steering channel/);
+    } finally {
+      cleanup(closedId);
+    }
+    // A mid-run stdin write failure (EPIPE) makes job-runner destroy the
+    // stream; steering must reject then too, never report delivery.
+    const brokenId = "steer-broken-channel";
+    const { job: brokenJob, stdin: brokenStdin } = runningJob();
+    brokenStdin.destroy();
+    register(brokenId, brokenJob);
+    try {
+      await assert.rejects(steerJob(brokenId, "steer-session", "hi"), /has no open steering channel/);
+    } finally {
+      cleanup(brokenId);
+    }
+  });
+
+  it("rejects when the write itself fails, never reporting a broken wire as delivered", async () => {
+    // Regression (F4): the stream is neither ended nor destroyed here, so the
+    // pre-write checks all pass — only the write callback reveals that the
+    // frame never reached the child.
+    setAdaptersForTest([createClaudeAdapter(fakeConfig())]);
+    const id = "steer-write-fails";
+    const failing = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error("write EPIPE"));
+      }
+    });
+    // job-runner.ts always listens; the runner swallowed the same error silently.
+    failing.on("error", () => {});
+    register(id, { ...runningJob().job, stdin: failing });
+    try {
+      await assert.rejects(steerJob(id, "steer-session", "hi"), /has no open steering channel/);
+    } finally {
+      cleanup(id);
+    }
+  });
+
+  it("rejects an adapter with no steering channel", async () => {
+    setAdaptersForTest([createFakeAdapter(fakeConfig({ models: { allowed: [], blocked: [] } }))]);
+    const id = "steer-unsupported";
+    const { job } = runningJob();
+    register(id, job, "fake");
+    try {
+      await assert.rejects(steerJob(id, "steer-session", "hi"), /Steering is not supported for fake-cli/);
+    } finally {
+      cleanup(id);
+    }
   });
 });

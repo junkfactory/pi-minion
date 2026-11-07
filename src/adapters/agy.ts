@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type {
   AdapterCapabilities,
+  AdapterParseState,
   AgentCliAdapter,
   NormalizedEvent,
   MinionConfig,
@@ -246,7 +247,7 @@ type ResultEvent = {
   };
 };
 
-export function parseLine(line: string): NormalizedEvent[] {
+export function parseLine(line: string, state?: AdapterParseState): NormalizedEvent[] {
   let parsed: StepUpdateEvent & InitEvent & ResultEvent;
   try {
     parsed = JSON.parse(line);
@@ -267,6 +268,20 @@ export function parseLine(line: string): NormalizedEvent[] {
       if (step.state === "DONE" && step.usage) {
         events.push({ kind: "usageDelta", delta: tokenDelta(step.usage) });
       }
+      // One agent_response step per assistant response, so its step_index is
+      // the response identifier. The turn starts at that response's FIRST
+      // update, not at DONE: a cap must count the turn that is running (a
+      // response that never finishes still counts), and emitting at DONE let
+      // turn N+1 run to completion before the cap noticed. A step updates many
+      // times while streaming, so the id dedupes — exactly one turnStart per
+      // response — and DONE clears it, making a reused id a fresh turn.
+      const turnId = typeof step.step_index === "number" ? String(step.step_index) : "current";
+      const scratch = state ?? {};
+      if (scratch.openTurnId !== turnId) {
+        events.push({ kind: "turnStart" });
+        scratch.openTurnId = turnId;
+      }
+      if (step.state === "DONE") scratch.openTurnId = undefined;
       // agy has no separate streamed "thinking" event — thinking_tokens only
       // ever shows up as a count inside an agent_response step's usage
       // (folded into outputTokens above), never as its own delta/step_type,
@@ -321,6 +336,10 @@ export function parseLine(line: string): NormalizedEvent[] {
     if (Array.isArray(result?.denied_actions) && result.denied_actions.length) {
       events.push({ kind: "permissionDenied" });
     }
+    // The terminal result line is agy's end of output: a one-shot run has no
+    // in-run completion event earlier than this, so the run is settled here
+    // whatever its status.
+    events.push({ kind: "runSettled" });
   }
   return events;
 }
@@ -328,7 +347,9 @@ export function parseLine(line: string): NormalizedEvent[] {
 const capabilities: AdapterCapabilities = {
   supportsAllowedTools: false,
   supportsEffort: true,
-  supportsMaxBudgetUsd: false
+  supportsMaxBudgetUsd: false,
+  emitsTurnEvents: true,
+  runSettledSource: "endOfStream"
 };
 
 export function describeUnsupported(_request: MinionRequest, _config: MinionConfig): string[] {

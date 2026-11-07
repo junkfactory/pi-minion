@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createJobUI, type JobUI } from "./agent.ui.js";
+import { resolveAdapterForModel } from "./adapters/registry.js";
 import {
   DISPLAY_ENTRY_TYPE,
   RESULT_MESSAGE_TYPE,
@@ -144,6 +145,45 @@ export function stopJob(id: string): void {
   clearTimeout(job.timeout);
   job.stop();
   jobs.delete(id);
+}
+
+// Mid-run steering: session-gated exactly like cancel, but the frame belongs
+// to the adapter. The adapter-boundary test forbids importing a CLI module
+// here, so the job's own model is resolved through the registry — the same
+// adapter instance class that built the initial stdin prompt. Rejects rather
+// than returning a sentinel: every failure means no frame was delivered, and
+// callers surface the message verbatim instead of pretending delivery.
+export async function steerJob(
+  id: string,
+  sessionId: string,
+  message: string,
+  deliverAs: "steer" | "followUp" = "steer"
+): Promise<void> {
+  if (!resolveOwnedJob(jobs, id, sessionId)) {
+    throw new Error(`No running pi minion job ${id} owned by this session was found.`);
+  }
+  const job = jobs.get(id)!;
+  // Settling flips the job to "finalizing" before closing the channel; the
+  // extra stream check covers a channel that ended between the two.
+  if (!job.stdin || job.stdin.writableEnded || job.stdin.destroyed) {
+    throw new Error(`Pi minion job ${id} has no open steering channel.`);
+  }
+  const adapter = resolveAdapterForModel(jobMeta.get(id)?.model ?? "");
+  const frame = adapter.steerFrame?.(message, deliverAs);
+  if (frame === undefined) {
+    throw new Error(`Steering is not supported for ${adapter.command}.`);
+  }
+  // Delivery is only real once the write callback confirms it: a wire failure
+  // (the child closed its end after the checks above) must reject rather than
+  // let the tool report the message as delivered.
+  const channel = job.stdin;
+  await new Promise<void>((resolve, reject) => {
+    channel.write(frame, (error) =>
+      error
+        ? reject(new Error(`Pi minion job ${id} has no open steering channel.`))
+        : resolve()
+    );
+  });
 }
 
 export function markJobFinished(

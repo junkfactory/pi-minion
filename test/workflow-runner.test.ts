@@ -222,6 +222,20 @@ describe("startWorkflow", () => {
     assert.equal(plain.started[0]!.request.timeoutMs, undefined);
   });
 
+  it("carries the step's maxTurns, else the workflow's, else none", async () => {
+    const h = harness([{ id: "a" }, { id: "b" }]);
+    h.wf.maxTurns = 50;
+    h.wf.steps[0]!.maxTurns = 1;
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    assert.deepEqual(h.started.map((started) => started.request.maxTurns), [1, 50]);
+
+    const plain = harness([{ id: "a" }]);
+    startWorkflow("wf", plain.deps);
+    await plain.flush();
+    assert.equal(plain.started[0]!.request.maxTurns, undefined);
+  });
+
   it("never runs more than MAX_PARALLEL_STEPS at once", async () => {
     const h = harness(Array.from({ length: 6 }, (_, i) => ({ id: `s${i}` })));
     startWorkflow("wf", h.deps);

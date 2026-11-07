@@ -33,6 +33,20 @@ export const DEFAULT_MAX_RESULT_CONTEXT_BYTES = 4_000;
 // unlike most letters, neither its ctrl+ nor alt+ form collides with an
 // editor, session, model, or tree-navigation action.
 const DEFAULT_SHORTCUT = "alt+j";
+// Bounds for the turn cap, shared by MinionConfig.maxTurns (the optional
+// config default) and MinionRequest.maxTurns. There is no DEFAULT_MAX_TURNS on
+// purpose: "unlimited" is the absence of a cap, so an omitted maxTurns stays
+// undefined end to end rather than every run inheriting a number. 100000 is
+// far past any real workload — it only keeps a typo (e.g. a pasted epoch) from
+// passing as a limit.
+export const MIN_MAX_TURNS = 1;
+export const MAX_MAX_TURNS = 100_000;
+
+// A cap must be a whole number of turns inside the bounds: flooring 2.5 would
+// enforce a cap the caller never asked for, and 0 would forbid every turn.
+export function isValidMaxTurns(value: number): boolean {
+  return Number.isInteger(value) && value >= MIN_MAX_TURNS && value <= MAX_MAX_TURNS;
+}
 
 // Merges a user-supplied override object over `base`. Falls back to `base`
 // unchanged (with a console warning) on unparsable or non-object JSON,
@@ -72,7 +86,8 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
     (config.adapterArgs !== undefined && adapterArgs === undefined) ||
     (config.usageNotes !== undefined && !isStrings(config.usageNotes)) ||
     (config.routingTable !== undefined && !isRoutingTableShape(config.routingTable)) ||
-    (config.costGate !== undefined && !isStrings(config.costGate))
+    (config.costGate !== undefined && !isStrings(config.costGate)) ||
+    (config.maxTurns !== undefined && !isValidMaxTurns(config.maxTurns))
   ) {
     throw new Error(
       overrideText !== undefined

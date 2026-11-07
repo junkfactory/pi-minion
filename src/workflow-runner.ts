@@ -294,7 +294,8 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     effort: step.effort,
     context: wf.context,
     maxBudgetUsd: step.maxBudgetUsd ?? wf.maxBudgetUsd,
-    timeoutMs: step.timeoutMs ?? wf.timeoutMs
+    timeoutMs: step.timeoutMs ?? wf.timeoutMs,
+    maxTurns: step.maxTurns ?? wf.maxTurns
   };
   const isCancelled = () => step.status !== "running";
   deps.startStep(request, wf, settle, { title: workflowStepTitle(wf.title, step.id), id: step.id, workflowId: id }, isCancelled).then(

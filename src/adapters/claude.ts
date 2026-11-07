@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type {
   AdapterCapabilities,
+  AdapterParseState,
   AgentCliAdapter,
   ModelBreakdown,
   MinionConfig,
@@ -38,12 +40,17 @@ export function providersOf(_model: string): string[] {
 }
 
 export function buildArgs(request: MinionRequest, config: MinionConfig): string[] {
-  const task = resolveTaskText(request);
+  // -p is print mode; --input-format stream-json lets the task arrive as a
+  // stdin user-message frame (userMessageFrame below) instead of the trailing
+  // positional prompt, which is what keeps the channel open for steering and
+  // for the stdin close that lets the CLI exit.
   return [
     "-p",
     "--disable-slash-commands",
     "--no-chrome",
     "--no-session-persistence",
+    "--input-format",
+    "stream-json",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -61,9 +68,37 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     MINION_PROMPT_BASE,
     "--effort",
     request.effort,
-    ...(config.adapterArgs?.claude?.args ?? []),
-    task
+    ...(config.adapterArgs?.claude?.args ?? [])
   ];
+}
+
+// The SDK user-message frame claude's stream-json input reads, one JSON object
+// per line. A plain top-level user turn (parent_tool_use_id null = not a
+// subagent tool result); steering reuses the same shape. No priority field is
+// set, so the CLI's default delivery ("next") applies.
+export function userMessageFrame(text: string, options: { shouldQuery?: boolean } = {}): string {
+  return `${JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+    // A follow-up only adds context: it must not trigger a model query of its
+    // own. Steering keeps the CLI's default (query on delivery).
+    ...(options.shouldQuery === false ? { shouldQuery: false } : {})
+  })}\n`;
+}
+
+// The command frame that makes claude abandon its in-flight turn. request_id
+// only has to be unique within the channel; the CLI echoes it in its
+// control_response, which parseLine drops.
+export function capStopFrame(): string {
+  return `${JSON.stringify({ type: "control_request", subtype: "interrupt", request_id: randomUUID() })}\n`;
+}
+
+// Steering reuses the SDK user-message frame: `steer` queues for the next turn
+// boundary, `followUp` is context that waits for the agent to finish
+// (shouldQuery false).
+export function steerFrame(message: string, deliverAs: "steer" | "followUp"): string {
+  return userMessageFrame(message, deliverAs === "followUp" ? { shouldQuery: false } : {});
 }
 
 export function environment(): NodeJS.ProcessEnv {
@@ -293,6 +328,48 @@ export function toolUseStarted(line: string): { id: string; name: string } | und
   }
 }
 
+// The id of the assistant message a line opens, if any — one assistant message
+// per assistant response, so this is claude's turn identifier.
+//
+// The turn STARTS at the `stream_event`/`message_start` that opens the message
+// (that is what --include-partial-messages buys us), not at the consolidated
+// non-streaming "assistant" line that follows once its content blocks finish: a
+// completion-time boundary let the turn after the cap stream in full before the
+// cap noticed. Both lines carry the same `message.id`, so the caller dedupes on
+// it — one turnStart per response — and a consolidated line that arrives without
+// a preceding stream event (an older CLI, a partial-message-less run) still
+// counts its turn.
+export function assistantTurnId(
+  line: string
+): { id: string; opens: boolean } | undefined {
+  try {
+    const parsed = JSON.parse(line) as {
+      type?: unknown;
+      event?: { type?: unknown; message?: { id?: unknown } };
+      message?: { id?: unknown };
+    };
+    const opens = parsed.type === "stream_event" && parsed.event?.type === "message_start";
+    if (!opens && parsed.type !== "assistant") return undefined;
+    const id = opens ? parsed.event?.message?.id : parsed.message?.id;
+    // Fallback id mirrors agy's: a line without an id still counts one turn,
+    // and the caller's dedupe keeps it from counting twice.
+    return { id: typeof id === "string" && id.length > 0 ? id : "current", opens };
+  } catch {
+    return undefined;
+  }
+}
+
+// The terminal "result" line is claude's own run-end signal — the stream ends
+// there (subtype success/error_max_turns/...), with no retry or queued-work
+// notion after it, so it maps to runSettled.
+export function isTerminalResult(line: string): boolean {
+  try {
+    return (JSON.parse(line) as { type?: unknown }).type === "result";
+  } catch {
+    return false;
+  }
+}
+
 // The CLI emits a consolidated, non-streaming "assistant" message once a
 // turn's content blocks finish streaming, repeating each tool_use block from
 // that turn — this time with its `input` fully parsed (unlike the empty
@@ -361,9 +438,24 @@ export function toolResults(
   }
 }
 
-export function parseLine(line: string): NormalizedEvent[] {
+export function parseLine(line: string, state?: AdapterParseState): NormalizedEvent[] {
   const events: NormalizedEvent[] = [];
   if (line.includes(PERMISSION_DENIAL_MARKER)) events.push({ kind: "permissionDenied" });
+  const turn = assistantTurnId(line);
+  if (turn !== undefined) {
+    // A line that names the turn already open does not open another: the
+    // consolidated message repeats its message_start's id, and a consolidated
+    // line arriving after an id-less opening event counts that same turn, so it
+    // adopts the real id instead.
+    const open = state?.openTurnId;
+    const alreadyOpen = open === turn.id || (open === "current" && !turn.opens);
+    if (!alreadyOpen) {
+      events.push({ kind: "turnStart" });
+      if (state) state.openTurnId = turn.id;
+    } else if (state && open !== turn.id) {
+      state.openTurnId = turn.id;
+    }
+  }
   const result = streamedResult(line);
   if (result !== undefined) events.push({ kind: "result", result });
   const model = initModel(line);
@@ -383,13 +475,16 @@ export function parseLine(line: string): NormalizedEvent[] {
   if (toolStart) events.push({ kind: "toolUse", id: toolStart.id, name: toolStart.name });
   for (const { id, args } of toolUseArgs(line)) events.push({ kind: "toolUseArgs", id, args });
   for (const toolResult of toolResults(line)) events.push({ kind: "toolResult", ...toolResult });
+  if (isTerminalResult(line)) events.push({ kind: "runSettled" });
   return events;
 }
 
 const capabilities: AdapterCapabilities = {
   supportsAllowedTools: true,
   supportsEffort: true,
-  supportsMaxBudgetUsd: true
+  supportsMaxBudgetUsd: true,
+  emitsTurnEvents: true,
+  runSettledSource: "event"
 };
 
 export function describeUnsupported(_request: MinionRequest, _config: MinionConfig): string[] {
@@ -426,6 +521,9 @@ export function createClaudeAdapter(config: MinionConfig): AgentCliAdapter {
     },
     providersOf,
     buildArgs,
+    stdinPrompt: (request) => userMessageFrame(resolveTaskText(request)),
+    capStopFrame,
+    steerFrame,
     environment,
     parseLine,
     describeUnsupported,
