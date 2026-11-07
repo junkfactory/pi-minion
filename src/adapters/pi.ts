@@ -395,7 +395,7 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
 // an agent skims past as a $5 stop; the policy lines say what to do instead.
 export function describePolicy(_request: MinionRequest, _config: MinionConfig): string[] {
   return [
-    "This adapter enforces no cost ceiling — the budget_usd field is advisory only. Bound the spend with a cheap model and low effort, and keep the task small.",
+    "This adapter enforces no cost ceiling — the budget_usd field is advisory only. Cap the run with maxTurns instead: the job is cancelled as soon as the turn cap is reached. And with a cheap model and low effort, each turn costs little.",
     "Every built-in pi tool call in this run is auto-approved — there is no permission gate. Scope the task so it needs no destructive tools, and verify the result yourself afterwards."
   ];
 }

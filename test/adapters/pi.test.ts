@@ -361,6 +361,7 @@ describe("describePolicy", () => {
     const policies = describePolicy(fakeRequest(), fakeConfig());
     assert.equal(policies.length, 2);
     assert.match(policies[0], /no cost ceiling/);
+    assert.match(policies[0], /maxTurns/);
     assert.match(policies[0], /cheap model/);
     assert.match(policies[1], /auto-approved/);
     assert.match(policies[1], /verify the result/);

@@ -722,7 +722,7 @@ describe("startJob", () => {
       await waitFor(() => posts.length > 0);
       assert.equal(jobMeta.get(id)?.status, "done");
       assert.match(posts[0].content, /MANY TURNS/);
-      assert.doesNotMatch(posts[0].content, /maxTurns/);
+      assert.doesNotMatch(posts[0].content, /maxTurns=\d+.reached/);
       // All three turns reached the runner: nothing stopped the run early.
       const stdout = readFileSync(join(JOB_ROOT, id, "stdout.json"), "utf8");
       assert.equal(stdout.split('"turn_start"').length - 1, 3);
@@ -763,7 +763,7 @@ describe("startJob", () => {
       );
       await waitFor(() => posts.length > 0);
       assert.equal(jobMeta.get(id)?.status, "done");
-      assert.doesNotMatch(posts[0].content, /maxTurns/);
+      assert.doesNotMatch(posts[0].content, /maxTurns=\d+.reached/);
       // A pinned number is just as final: config 1 must not win over 5.
       const { sessionId: session2, posts: posts2 } = newSession();
       const id2 = await startJob(
