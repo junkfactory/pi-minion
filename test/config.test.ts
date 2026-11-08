@@ -342,9 +342,9 @@ describe("maxTurns config", () => {
     assert.equal((await loadWith(JSON.stringify({ maxTurns: 100_000 }))).maxTurns, 100_000);
   });
 
-  it("leaves the cap undefined when the config omits it", async () => {
-    // Absence is the default: no DEFAULT_MAX_TURNS constant fills it in.
-    assert.equal((await loadWith("{}")).maxTurns, undefined);
+  it("inherits the shipped config's 400-turn default when the override omits it", async () => {
+    // No DEFAULT_MAX_TURNS constant fills it in; the shipped pi-minion.json does.
+    assert.equal((await loadWith("{}")).maxTurns, 400);
   });
 
   it("rejects an out-of-range, fractional, or non-numeric config cap at load", async () => {

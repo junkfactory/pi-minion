@@ -225,7 +225,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -240,6 +240,13 @@ describe("formatJobFrontmatter", () => {
     assert.match(formatJobFrontmatter(base), /budget_usd: \\\$5\n/);
     assert.match(formatJobFrontmatter({ ...base, budgetEnforced: true }), /budget_usd: \\\$5\n/);
     assert.match(formatJobFrontmatter({ ...base, budgetEnforced: false }), /budget_usd: \\\$5 \(not enforced\)\n/);
+  });
+
+  it("renders the resolved turn cap, and none when no cap applied", () => {
+    const base = { jobId: "j1", agent: "pi", model: "glm-5.3-flash", maxBudgetUsd: 5, timeoutMs: 900000, jobDir: "/tmp/j" };
+    assert.match(formatJobFrontmatter({ ...base, maxTurns: 3 }), /budget_usd: \\\$5\nmaxTurns: 3\ntimeout: 15m\n/);
+    assert.match(formatJobFrontmatter({ ...base, maxTurns: null }), /maxTurns: none\n/);
+    assert.match(formatJobFrontmatter(base), /maxTurns: none\n/);
   });
 
   it("reports n/a usage when the job was killed before a result event", () => {
@@ -258,7 +265,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑n/a ↓n/a →n/a ←n/a\ncost_usd: n/a\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑n/a ↓n/a →n/a ←n/a\ncost_usd: n/a\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -279,7 +286,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku (medium)\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku (medium)\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -321,7 +328,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑1.0K ↓9.0K →17.0K ←20.0K (claude-haiku-4-5-20251001 ↑1.0K ↓6.0K →10.0K ←20.0K + claude-sonnet-5 ↑0.1K ↓0.9K →2.0K ←7.0K)\ncost_usd: \\$1.2000 (claude-haiku-4-5-20251001 \\$0.9000 + claude-sonnet-5 \\$0.3000)\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑1.0K ↓9.0K →17.0K ←20.0K (claude-haiku-4-5-20251001 ↑1.0K ↓6.0K →10.0K ←20.0K + claude-sonnet-5 ↑0.1K ↓0.9K →2.0K ←7.0K)\ncost_usd: \\$1.2000 (claude-haiku-4-5-20251001 \\$0.9000 + claude-sonnet-5 \\$0.3000)\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -344,7 +351,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
+      "# Pi Minion: claude\n---\nmodel: claude-haiku-4-5-20251001\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\n\n---"
     );
   });
 
@@ -365,7 +372,7 @@ describe("formatJobFrontmatter", () => {
     });
     assert.equal(
       frontmatter,
-      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\ntimeout: 15m\noutput_path: /tmp/job/abc\nreport: [result.md](file:///tmp/job/abc/result.md)\n\n---"
+      "# Pi Minion: claude\n---\nmodel: haiku\njob_id: f66c0f52-f2e8-45bf-9a61-d40738af09fb\ntoken_usage: ↑0.0K ↓0.0K →9.1K ←22.5K\ncost_usd: \\$0.0222\nbudget_usd: \\$5\nmaxTurns: none\ntimeout: 15m\noutput_path: /tmp/job/abc\nreport: [result.md](file:///tmp/job/abc/result.md)\n\n---"
     );
   });
 

@@ -59,6 +59,9 @@ export function describeJobResult(outcome: {
   code: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  // The idle window that fired, when the timeout was an inactivity backstop:
+  // absent callers (and unknown windows) keep the plain timeout wording.
+  idleTimeoutMs?: number;
   exceededOutputLimit: boolean;
   finalResult: string | undefined;
   stderrTail: string;
@@ -81,10 +84,12 @@ export function describeJobResult(outcome: {
   if (outcome.timedOut) {
     // A killed `claude` process typically self-reports as exit code
     // 128+SIGTERM(15)=143 with no stderr, rather than surfacing as a
-    // Node-level signal — checking timedOut explicitly (set when the
-    // config.timeoutMs timer fires) is what distinguishes this from a
-    // generic non-zero exit below.
-    return `Pi minion timed out before finishing and was stopped. ${partialOutputHint}`;
+    // Node-level signal — checking timedOut explicitly (set only when the
+    // *idle* timer fires) is what distinguishes this from a generic non-zero
+    // exit below.
+    return outcome.idleTimeoutMs === undefined
+      ? `Pi minion timed out before finishing and was stopped. ${partialOutputHint}`
+      : `Pi minion stopped after going silent for over ${formatDurationMs(outcome.idleTimeoutMs)} with no output. ${partialOutputHint}`;
   }
   if (outcome.code === 0) {
     if (outcome.finalResult) return outcome.finalResult;
@@ -175,6 +180,11 @@ export function formatJobFrontmatter(
     // The limit that actually applied: the request's timeoutMs, else the
     // config default.
     timeoutMs: number;
+    // The turn cap that actually applied, in resolution order: the request's
+    // own value, else a pinned schedule step's value (a schedule stores what
+    // it resolved at creation time), else the config default. null/missing
+    // means no cap was applied, so the field renders "none".
+    maxTurns?: number | null;
     jobDir: string;
     // Only set when the minion's full result was actually written to disk
     // (the clean-exit, non-empty-result path) — omitted for timeouts,
@@ -195,6 +205,7 @@ export function formatJobFrontmatter(
     // LaTeX and prints the rest of the paragraph raw, report link included.
     `cost_usd: ${formatCostUsd(params.totalCostUsd)}${formatModelBreakdown(params.perModel, (entry) => entry.costUsd, (n) => formatCostUsd(n))}`.replaceAll("$", "\\$"),
     `budget_usd: \\$${params.maxBudgetUsd}${params.budgetEnforced === false ? " (not enforced)" : ""}`,
+    `maxTurns: ${params.maxTurns ?? "none"}`,
     `timeout: ${formatDurationMs(params.timeoutMs)}`,
     `output_path: ${params.jobDir}`,
     // A markdown link so pi's renderer makes it clickable (OSC 8). Only the

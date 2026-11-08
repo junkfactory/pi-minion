@@ -37,11 +37,47 @@ case "$line" in
      exit 0 ;;
   *MODE:empty*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exit 0 ;;
   *MODE:slow*) echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'; exec sleep 30 ;;
+  *MODE:idlekick*)
+     # Talks steadily — one line every 100ms, across several idle windows — then
+     # reports a result. An idle backstop keeps resetting; a wall-clock one
+     # would kill this run for taking longer than timeoutMs.
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     i=0
+     while [ "$i" -lt 8 ]; do
+       echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"tick"}}}'
+       sleep 0.1
+       i=$((i+1))
+     done
+     echo '{"type":"result","result":"STILL ALIVE","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
+     exit 0 ;;
+  *MODE:idlegap*)
+     # Two quick lines, then one silence far longer than the idle window.
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"tick"}}}'
+     sleep 0.1
+     echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"tick"}}}'
+     exec sleep 30 ;;
+  *MODE:stopafterreset*)
+     # One stdout line re-arms the idle timer past the handle jobs.set stored;
+     # the child then ignores SIGTERM briefly and exits on its own, so a leaked
+     # timer would fire inside the stop and imprint timed_out=true on it.
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     echo '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"tick"}}}'
+     trap '' TERM
+     sleep 0.5
+     exit 0 ;;
   *MODE:eof*)
      echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
      echo '{"type":"result","result":"STDIN CLOSED OK","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
      while IFS= read -r l; do printf '%s\\n' "$l" >> "$HOME/stdin.txt"; done
      echo eof >> "$HOME/eof.txt"
+     exit 0 ;;
+  *MODE:finalchunk*)
+     # A final stdout chunk with NO trailing newline, then an immediate exit: the
+     # close path flushes that buffered line through consumeLine *after*
+     # finalization cleared the idle timer, which must not re-arm it.
+     echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
+     printf '%s' '{"type":"result","result":"NO TRAILING NEWLINE","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":2}}'
      exit 0 ;;
   *MODE:long*)
      echo '{"type":"system","subtype":"init","model":"claude-fake-1"}'
@@ -139,6 +175,60 @@ case "$line" in
      while IFS= read -r l; do :; done
      echo eof >> "$HOME/pi-eof.txt"
      exit 0 ;;
+  *MODE:budget*)
+     # Reports the number of turns encoded in the prompt (MODE:budget<N>), then
+     # completes cleanly. Every steering frame the runner writes — the wrap-up
+     # warning, if any — is logged once the channel closes, so a test can count
+     # them. The child emits all its turns first, so the warning always lands
+     # while the run is still live.
+     n=$(printf '%s' "$line" | sed 's/.*MODE:budget//; s/[^0-9].*//')
+     i=0
+     while [ "$i" -lt "$n" ]; do
+        echo '{"type":"turn_start"}'
+        i=$((i+1))
+     done
+     echo '{"type":"message_end","message":{"role":"assistant","model":"pi-fake-1","content":[{"type":"text","text":"BUDGET FINAL"}],"usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.02}},"stopReason":"stop"}}'
+     echo '{"type":"agent_settled","aborted":false}'
+     while IFS= read -r l; do printf '%s\n' "$l" >> "$HOME/pi-stdin.txt"; done
+     exit 0 ;;
+  *MODE:ignore*)
+     # A child that ignores the wrap-up warning: it reports MODE:ignore<N>
+     # turns, then waits on the command channel and ends only once the cap's
+     # abort arrives, logging every frame it received in order.
+     n=$(printf '%s' "$line" | sed 's/.*MODE:ignore//; s/[^0-9].*//')
+     i=0
+     while [ "$i" -lt "$n" ]; do
+        echo '{"type":"turn_start"}'
+        i=$((i+1))
+     done
+     while IFS= read -r l; do
+        printf '%s\n' "$l" >> "$HOME/pi-stdin.txt"
+        case "$l" in
+          *'"abort"'*) echo '{"type":"agent_settled","aborted":true}'; break ;;
+        esac
+     done
+     while IFS= read -r l; do :; done
+     exit 0 ;;
+  *MODE:capped*)
+     # Reports turns straight past maxTurns=12's cap: turn 2 must produce
+     # exactly one wrap-up warning, turn 13 trips the cap, and the turn reports
+     # arriving afterwards must not produce another. The channel is only read
+     # after the loop, so the frames are logged in the order they were written.
+     i=0
+     while [ "$i" -lt 15 ]; do
+        echo '{"type":"turn_start"}'
+        sleep 0.02
+        i=$((i+1))
+     done
+     while IFS= read -r l; do
+        printf '%s\n' "$l" >> "$HOME/pi-stdin.txt"
+        case "$l" in
+          *'"abort"'*) break ;;
+        esac
+     done
+     echo '{"type":"agent_settled","aborted":true}'
+     while IFS= read -r l; do :; done
+     exit 0 ;;
   *MODE:multi*)
      # Three turns with no cap in sight: the unlimited default must let them all
      # run and still finish cleanly.
@@ -209,6 +299,9 @@ const noop = () => {};
 const fakeUI = new Proxy({}, { get: () => noop }) as unknown as Parameters<typeof startJob>[5];
 
 const request = (mode: string) => ({ task: `Do a thing MODE:${mode}`, workspace, model: "sonnet", effort: "medium" });
+// Frames the fake pi child received, in order (one frame per line).
+const stdinFrames = (file: string) =>
+  existsSync(join(home, file)) ? readFileSync(join(home, file), "utf8").trim().split("\n") : [];
 const spawnCount = () =>
   existsSync(join(home, "spawned")) ? readFileSync(join(home, "spawned"), "utf8").trim().split("\n").length : 0;
 
@@ -731,6 +824,108 @@ describe("startJob", () => {
     }
   });
 
+  describe("turn-budget wrap-up warning", () => {
+    // The warning is a stdin steer frame, so it needs an adapter that has one:
+    // the fake pi child below reports turns and logs every frame it receives.
+    const withPiModel = async (mode: string, maxTurns: number) => {
+      setModelRegistry(fakeModelRegistry([{ id: "crouton-alpha-free", provider: "opencode-go" }]));
+      const { sessionId, posts } = newSession();
+      const id = await startJob(
+        { task: `Do a thing MODE:${mode}`, workspace, model: "opencode-go/crouton-alpha-free", effort: "medium", maxTurns },
+        workspace, sessionId, undefined, noop, fakeUI
+      );
+      await waitFor(() => posts.length > 0);
+      return { id, posts };
+    };
+
+    it("warns once when ten turns remain and still lets the run finish", async () => {
+      try {
+        const { id, posts } = await withPiModel("budget12", 12);
+        assert.equal(jobMeta.get(id)?.status, "done");
+        assert.match(posts[0].content, /BUDGET FINAL/);
+        assert.doesNotMatch(posts[0].content, /maxTurns=12 reached/);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 2, "the prompt frame and exactly one warning");
+        assert.match(frames[0], /MODE:budget12/);
+        assert.match(frames[1], /Turn budget warning/);
+        assert.match(frames[1], /"type":"steer"/);
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+
+    it("warns exactly once on a long capped run", async () => {
+      try {
+        const { id, posts } = await withPiModel("budget20", 20);
+        assert.equal(jobMeta.get(id)?.status, "done");
+        assert.match(posts[0].content, /BUDGET FINAL/);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 2);
+        assert.equal(frames.filter((frame) => /Turn budget warning/.test(frame)).length, 1);
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+
+    it("skips the warning when the cap leaves no room for one and still stops the run", async () => {
+      try {
+        const { id, posts } = await withPiModel("ignore9", 8);
+        assert.equal(jobMeta.get(id)?.status, "cancelled");
+        assert.match(posts[0].content, /maxTurns=8 reached/);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 2, "the prompt frame and the cap's abort only");
+        assert.doesNotMatch(frames.join("\n"), /Turn budget warning/);
+        assert.match(frames[1], /"abort"/);
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+
+    it("warns nowhere on a maxTurns=1 run", async () => {
+      try {
+        const { id, posts } = await withPiModel("budget1", 1);
+        assert.equal(jobMeta.get(id)?.status, "done");
+        assert.match(posts[0].content, /BUDGET FINAL/);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 1, "the prompt frame alone");
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+
+    it("a child that ignores the warning is still stopped by the cap", async () => {
+      try {
+        const { id, posts } = await withPiModel("ignore13", 12);
+        assert.equal(jobMeta.get(id)?.status, "cancelled");
+        assert.equal(posts[0].content.split("maxTurns=12 reached").length - 1, 1);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 3, "the prompt frame, the warning, then the abort");
+        assert.match(frames[1], /Turn budget warning/);
+        assert.match(frames[2], /"abort"/);
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+    it("warns once when the child keeps reporting turns past the cap", async () => {
+      try {
+        const { id, posts } = await withPiModel("capped", 12);
+        assert.equal(jobMeta.get(id)?.status, "cancelled");
+        assert.match(posts[0].content, /maxTurns=12 reached/);
+        // The child reported 15 turns: turn 2 leaves exactly ten to go (the one
+        // warning), turn 13 trips the cap, and turns 14-15 land after it
+        // engaged — the reports the warn guard must swallow.
+        const stdout = readFileSync(join(JOB_ROOT, id, "stdout.json"), "utf8");
+        assert.equal(stdout.split('"turn_start"').length - 1, 15);
+        const frames = stdinFrames("pi-stdin.txt");
+        assert.equal(frames.length, 3, "the prompt, the one warning, then the cap's abort");
+        assert.equal(frames.filter((frame) => /Turn budget warning/.test(frame)).length, 1);
+        assert.equal(frames.filter((frame) => /"abort"/.test(frame)).length, 1);
+      } finally {
+        setModelRegistry(undefined);
+      }
+    });
+  });
+
   it("config maxTurns is the default when the request omits one", async () => {
     const overrideDir = join(home, ".pi", "agent", "extensions");
     mkdirSync(overrideDir, { recursive: true });
@@ -912,7 +1107,7 @@ describe("startJob", () => {
     assert.equal(jobMeta.get(id)?.status, "cancelled");
   });
 
-  it("a run that outlives its timeoutMs settles not-ok and marks the job errored", async () => {
+  it("a run that stays silent past its timeoutMs settles not-ok and marks the job errored", async () => {
     const { sessionId } = newSession();
     const outcomes: Outcome[] = [];
     const id = await startJob(
@@ -923,8 +1118,107 @@ describe("startJob", () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(outcomes.length, 1);
     assert.equal(outcomes[0].ok, false);
-    assert.match(outcomes[0].errorReason ?? "", /timed out before finishing/);
+    assert.match(outcomes[0].errorReason ?? "", /stopped after going silent for over .* with no output/);
     assert.equal(jobMeta.get(id)?.status, "errored");
+  });
+
+  it("an idle reset keeps a slow-but-alive run going past its timeoutMs", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const startedAt = Date.now();
+    const id = await startJob(
+      { ...request("idlekick"), timeoutMs: 200 }, workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › idle-kick", id: "idle-kick", workflowId: "wf" }
+    );
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    // Three-plus idle windows' worth of steady output: a fixed timer would
+    // have killed this run, the reset timer must not.
+    assert.ok(Date.now() - startedAt > 200, "the run outlived one timeout window");
+    assert.equal(outcomes[0].ok, true);
+    assert.equal(jobMeta.get(id)?.status, "done");
+    assert.match(outcomes[0].finalResult ?? "", /STILL ALIVE/);
+    assert.doesNotMatch(outcomes[0].errorReason ?? "", /silent/);
+  });
+
+  it("a silent gap longer than the idle window kills the run", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const id = await startJob(
+      { ...request("idlegap"), timeoutMs: 200 }, workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › idle-gap", id: "idle-gap", workflowId: "wf" }
+    );
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, false);
+    assert.match(outcomes[0].errorReason ?? "", /stopped after going silent for over .* with no output/);
+    assert.equal(jobMeta.get(id)?.status, "errored");
+  });
+
+  it("an explicit stop after an idle reset leaves no leaked timer behind", async () => {
+    // Regression: jobs.set stored only the timer from spawn, so each stdout
+    // line's re-arm left the map holding a dead handle. stopJob then cleared
+    // the dead one and the live timer fired mid-stop, imprinting a silent
+    // timeout on a run the user had cancelled. The child ignores SIGTERM and
+    // exits on its own well after the idle window, so a leaked timer is still
+    // armed when it would fire — and its timed_out=true reaches the close log.
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const id = await startJob(
+      { ...request("stopafterreset"), timeoutMs: 300 }, workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › stop-reset", id: "stop-reset", workflowId: "wf" }
+    );
+    const stdoutText = () =>
+      existsSync(join(JOB_ROOT, id, "stdout.json"))
+        ? readFileSync(join(JOB_ROOT, id, "stdout.json"), "utf8")
+        : "";
+    // A stdout line re-arms the idle timer past the handle jobs.set stored.
+    await waitFor(() => stdoutText().includes("tick"));
+    // Same sequence cancel_pi_minion runs, inside the freshly armed window.
+    stopJob(id);
+    markJobFinished(id, "cancelled");
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, false);
+    assert.equal(jobMeta.get(id)?.status, "cancelled");
+    // Neither the result text nor the lifecycle log may claim a silent timeout.
+    assert.doesNotMatch(outcomes[0].errorReason ?? "", /silent|timed out/);
+    const logLines = existsSync(join(JOB_ROOT, "pi-minion.log"))
+      ? readFileSync(join(JOB_ROOT, "pi-minion.log"), "utf8")
+          .split("\n")
+          .filter((line) => line.includes(`job_id=${id}`))
+      : [];
+    assert.ok(logLines.length > 0, "the cancelled job was logged");
+    assert.doesNotMatch(logLines.join("\n"), /timed_out=true/);
+  });
+
+  it("an unterminated final stdout chunk flushed at close does not re-arm the idle timer", async () => {
+    const { sessionId } = newSession();
+    const outcomes: Outcome[] = [];
+    const startedAt = Date.now();
+    const id = await startJob(
+      { ...request("finalchunk"), timeoutMs: 300 }, workspace, sessionId, undefined, noop, fakeUI,
+      undefined, (o) => outcomes.push(o), { title: "wf › final-chunk", id: "final-chunk", workflowId: "wf" }
+    );
+    await waitFor(() => outcomes.length > 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].ok, true);
+    assert.equal(jobMeta.get(id)?.status, "done");
+    // The buffered, newline-less result line only reaches the runner from the
+    // close path's flush, so its presence proves the post-finalize consumeLine
+    // ran — the call that used to re-arm the already-cleared idle timer.
+    assert.match(outcomes[0].finalResult ?? "", /NO TRAILING NEWLINE/);
+    assert.ok(Date.now() - startedAt < 300, "the run settled inside one idle window");
+    // Outlive the window: a leaked timer firing now would flag a timeout and
+    // try to stop an already-exited process; the job must stay cleanly done.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assert.equal(outcomes.length, 1);
+    assert.equal(jobMeta.get(id)?.status, "done");
+    assert.doesNotMatch(outcomes[0].errorReason ?? "", /silent|timed out/);
   });
 
   it("isCancelled rejects before spawning and marks the job cancelled", async () => {

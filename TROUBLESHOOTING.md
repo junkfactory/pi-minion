@@ -11,8 +11,9 @@ it was killed. Two known causes, both already fixed to report their actual
 reason instead of a bare exit code:
 
 - Genuine `timeoutMs` expiry — the limit comes from the call's `timeoutMs` or
-  from the config default when the call omits it — now reported as "timed out
-  before finishing," pointing at the job's `stdout.json` for partial output.
+  from the config default when the call omits it — now reported as "stopped
+  after going silent for over … with no stdout output," pointing at the job's
+  `stdout.json` for partial output.
 - The extension's own `session_shutdown` handler used to kill every running
   job on *any* shutdown reason — but `/reload`, `/new`, resuming, or
   forking a session all fire `session_shutdown` too, not just quitting Pi.
@@ -226,3 +227,29 @@ age above then surfaces only for that newest tool; (b) launching without `-ne` b
 loading dev-mode via `-e` double-loads pi-minion (the installed `git:` package copy and the
 explicit `-e` dev copy both register, every tool name collides, load fails) — always pair a
 dev-mode `-e` load with `-ne`.
+
+**A long run was killed for silent inactivity — or it hit its turn cap
+without warning.**
+`timeoutMs` is an *idle* backstop now: every stdout line from the minion
+restarts the timer, so a long but productive run is never killed merely for
+taking a while, and a stuck run's only kill is silence (the call's
+`timeoutMs`, else the config default; then `SIGTERM`, `SIGKILL` 5 s later).
+If a run does die mid-work, check whether it went quiet that long —
+`<jobDir>/stdout.json` shows the last line it emitted.
+
+A capped run gets one steering nudge ten turns before the cap
+(`maxTurns - 10`), telling it to finish and stop opening new work. It is
+skipped when the cap leaves no room (a `maxTurns` of 10 or fewer) and for
+adapters with no steering channel (`agy`, `fm`), which then only ever see the
+hard cap. A run that ignores the warning still ends as cancelled with a
+`maxTurns=N reached` note on its result. To see which limits actually
+applied, read the frontmatter block at the top of the job's posted result
+message in the transcript (that is where the frontmatter is added —
+`<jobDir>/result.md` holds only the raw final result): it records the
+resolved `maxTurns` (`maxTurns: none` when the run was truly uncapped) and the
+`timeout`, so an unexpected cap can be traced to the call, the workflow or
+schedule that pinned it, or the config default.
+
+The wrap-up warning is deliberately anchored to a turn, not the clock:
+steering frames only land at turn boundaries, so a time-based warning could
+fire with no turn left to deliver it.

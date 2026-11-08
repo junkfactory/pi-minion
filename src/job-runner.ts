@@ -67,6 +67,9 @@ const STATUS_UPDATE_INTERVAL_MS = 1_000;
 // Grace for a child to act on a teardown request (stdin EOF, or SIGTERM after
 // it) before the next, harsher signal.
 const GRACE_MS = 5_000;
+// Turns left when a capped run gets one steering nudge to wrap up, so the cap
+// stops a run that ignores it rather than one that had no chance to finish.
+const WARN_TURNS_LEFT = 10;
 
 // The run's effective turn cap. A request value is final — a number is the cap,
 // and null is a pinned "no cap" (a schedule resolved step ?? workflow ?? config
@@ -328,13 +331,30 @@ export async function startJob(
   // whole run. Reaching the cap asks the CLI to abandon the run over its own
   // command channel, which keeps the CLI's teardown (final turn bookkeeping)
   // intact; then the job finalizes like any other stop, as "cancelled". The
-  // escalation wired to runSettled (and runTimeoutMs as the backstop) still
+  // escalation wired to runSettled (and the runTimeoutMs idle backstop) still
   // covers a child that ignores the request.
   // The caller's cap wins; config.maxTurns is the optional default (validated
   // at load). Absent in both = unlimited, so the cap stays undefined.
   const maxTurns = resolveMaxTurns(validRequest, config);
   let turnsSeen = 0;
   let cappedAt: number | undefined;
+  // One-shot wrap-up warning. It fires exactly on the turn that leaves
+  // WARN_TURNS_LEFT turns, so it reaches the CLI early enough to act on and
+  // never repeats. A cap of WARN_TURNS_LEFT turns or fewer has no room for it.
+  let warnedCap: number | undefined;
+  const warnCap = () => {
+    // Nothing to warn about once the hard cap has engaged too: the run is
+    // already being stopped, so a steer frame would be noise (or a write to a
+    // channel the cap just aborted).
+    if (warnedCap !== undefined || maxTurns === undefined || cappedAt !== undefined) return;
+    if (maxTurns <= WARN_TURNS_LEFT) return;
+    const turnsSeenNow = turnsSeen;
+    if (turnsSeenNow !== maxTurns - WARN_TURNS_LEFT) return;
+    warnedCap = turnsSeenNow;
+    const msg = `Turn budget warning: ${WARN_TURNS_LEFT} of your ${maxTurns} turns remain. Finish now — post your final result and stop opening new work; the run is cancelled the moment a turn starts beyond turn ${maxTurns}.`;
+    const frame = adapter.steerFrame?.(msg, "steer");
+    if (frame !== undefined && stdin && !stdinBroken()) writeStdin(frame);
+  };
   const capStop = () => {
     if (cappedAt !== undefined || maxTurns === undefined) return;
     cappedAt = maxTurns;
@@ -390,7 +410,34 @@ export async function startJob(
     const toolStartedAt = toolCallStartedAt.get(toolCallId);
     return toolStartedAt !== undefined ? Date.now() - toolStartedAt : undefined;
   };
+  // The caller's per-run limit wins; config.timeoutMs is the fallback backstop.
+  // It bounds *silence*, not wall clock: every stdout line restarts the timer,
+  // so a long but talkative run is never killed merely for taking a while.
+  const runTimeoutMs = validRequest.timeoutMs ?? config.timeoutMs;
+  let timeout: NodeJS.Timeout | undefined;
+  const resetIdleTimeout = () => {
+    // Never re-arm once the job is finalizing: the close path flushes a
+    // buffered final stdout line through consumeLine *after* beginFinalize
+    // cleared the timer, and a live timer would keep the process alive for a
+    // whole idle window past a run that already ended.
+    if (jobFinished) return;
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      stopProcess();
+    }, runTimeoutMs);
+    // Keep the store's entry on the live handle: this closure re-arms on every
+    // stdout line, but jobs.set ran once at spawn, so without this sync
+    // stopJob would clearTimeout a dead handle and leave the real one armed.
+    // The first call below happens before jobs.set — the guard covers that.
+    const job = jobs.get(id);
+    if (job) job.timeout = timeout;
+  };
+
   const consumeLine = (line: string) => {
+    // A stdout line proves the child is working: restart the idle window.
+    // stderr does not — a chatty stderr must not mask a hung run.
+    resetIdleTimeout();
     for (const event of adapter.parseLine(line, parseState)) {
       applyModalEvent(jobUI, id, event, toolDurationFallback);
       switch (event.kind) {
@@ -450,6 +497,11 @@ export async function startJob(
           break;
         case "turnStart":
           turnsSeen++;
+          // Warn before the cap check so the warning lands on its own turn, not
+          // after a stop. An adapter without steerFrame (agy, fm) has no way to
+          // receive it, so the warning is silently skipped and only the hard cap
+          // applies — the same degradation as steering.
+          warnCap();
           // Strictly greater: the maxTurns-th turn is the one the caller paid
           // for; the turn after it is the runaway one to stop.
           if (maxTurns !== undefined && turnsSeen > maxTurns && cappedAt === undefined) capStop();
@@ -471,16 +523,12 @@ export async function startJob(
     stopProcess
   );
 
-  // The caller's per-run limit wins; config.timeoutMs is the fallback backstop.
-  const runTimeoutMs = validRequest.timeoutMs ?? config.timeoutMs;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    stopProcess();
-  }, runTimeoutMs);
+  // Start the idle backstop now; consumeLine restarts it on every stdout line.
+  resetIdleTimeout();
   jobs.set(id, {
     process: proc,
     stdin,
-    timeout,
+    timeout: timeout!,
     stop: stopProcess,
     // Also re-resolved: a replacement can land during the mkdir/spawn awaits.
     sessionId: resolveSessionId(sessionId),
@@ -532,6 +580,8 @@ export async function startJob(
       perModel: finalUsage?.perModel,
       maxBudgetUsd: request.maxBudgetUsd ?? config.maxBudgetUsd,
       budgetEnforced: adapter.capabilities.supportsMaxBudgetUsd,
+      // The cap the runner actually enforces (same resolution as capStop).
+      maxTurns: resolveMaxTurns(validRequest, config) ?? null,
       timeoutMs: runTimeoutMs,
       jobDir,
       reportPath,
@@ -626,7 +676,8 @@ export async function startJob(
               stderrTail: output.stderrTail,
               stdoutPath: output.stdoutPath,
               rawOutputHint: adapter.rawOutputHint,
-              modelError: runError
+              modelError: runError,
+              idleTimeoutMs: runTimeoutMs
             });
       const result = buildResult(resultForDisplay);
       const contextResult = resultForContext === resultForDisplay ? result : buildResult(resultForContext);

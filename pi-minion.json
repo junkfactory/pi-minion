@@ -14,6 +14,7 @@
   ],
   "maxBudgetUsd": 5,
   "timeoutMs": 600000,
+  "maxTurns": 400,
   "pruneAfterDays": 3,
   "maxOutputBytes": 15000000,
   "maxResultPreviewBytes": 50000,

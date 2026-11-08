@@ -274,11 +274,12 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     const description = (schema: Schema) => schema.properties.maxTurns!.description ?? "";
     const run = description(RUN_PI_MINION_PARAMETERS as Schema);
     assert.match(run, /1\.\.100000/);
-    assert.match(run, /config maxTurns applies when set, otherwise the run is unlimited/);
+    assert.match(run, /config maxTurns applies \(400 in the shipped config\)/);
+    assert.match(run, /omitting never silently means unlimited/);
     assert.match(run, /maxTurns=N reached/);
     const workflow = description(RUN_PI_MINION_WORKFLOW_PARAMETERS as Schema);
     assert.match(workflow, /step resolves its own maxTurns, then this value, then the config maxTurns/);
-    assert.match(workflow, /unlimited when all are absent/);
+    assert.match(workflow, /unlimited only when all are absent/);
     const step = description(
       (RUN_PI_MINION_WORKFLOW_PARAMETERS as unknown as { properties: { steps: { items: Schema } } }).properties
         .steps.items

@@ -73,8 +73,10 @@ export type MinionRequest = {
   effort: string;
   context?: string;
   maxBudgetUsd?: number;
-  // Wall-clock limit for this run in milliseconds. Overrides config.timeoutMs
-  // when set; validateRequest() rejects 0, negative, and non-finite values.
+  // Idle limit for this run in milliseconds: the run is stopped only after it
+  // has produced no stdout output for this long (an idle backstop, not a
+  // wall-clock budget). Overrides config.timeoutMs when set; validateRequest()
+  // rejects 0, negative, and non-finite values.
   timeoutMs?: number;
   // Cap on assistant turns for this run. Omitted = unlimited (the default):
   // an open-ended task shouldn't be cut short by a guess, so a cap is only

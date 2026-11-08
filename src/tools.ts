@@ -91,17 +91,17 @@ export const PI_MINION_EXAMPLES = [
 // descriptions.
 export const PI_MINION_USAGE_NOTES = [
   "task must be fully self-contained — each run_pi_minion job is stateless and has no access to this conversation or any prior job's result. Fill `context` on every call — not just retries — with task-relevant evidence, not an entire report; an earlier job id alone is not enough, since a job cannot look it up.",
-  "effort is required — cheap model + low effort for simple work, stronger model + higher effort for complex/risky work, and the user's choice wins (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd; timeoutMs is optional and overrides the config default (help_pi_minion prints that default under `defaults`) — set it on every run to the wall-clock limit the task actually needs; the config default is a runaway backstop, not a plan.",
+  "effort is required — cheap model + low effort for simple work, stronger model + higher effort for complex/risky work, and the user's choice wins (see run_pi_minion's effort description); maxBudgetUsd is optional and defaults to the configured maxBudgetUsd; timeoutMs is optional and overrides the config default (help_pi_minion prints that default under `defaults`) — it bounds silence, not total run time: the run stops only after this much with no stdout output at all, so set it per task to the longest silent gap the task can legitimately produce; the config default is a runaway backstop, not a plan.",
   "model must be one of `models` above — already filtered to what's installed on this machine. pi entries are provider-qualified (`provider/id`, e.g. `opencode-go/gpt-6-luna`); claude, agy, and fm entries are bare ids.",
   'If the user names a model vaguely or ambiguously (a brand like "gemini", a partial or outdated id, an old alias), filter `models` above for similar entries, present them to the user, and run only the id they approve — don\'t guess.',
   "schedule_pi_minion takes the same fields plus a cron expression (deferred: like the other schedule/workflow lifecycle tools it is not listed in the prompt unless activated — see the tool_search note) and runs the task on that schedule until cancel_pi_minion_schedule or this session quits; a tick is skipped while the previous run is still going; a failed tick's result stays quiet unless the run self-stops the schedule (a process error is the exception — it starts a turn). Use it only when the user asks for a recurring or later run (run_pi_minion for a one-off); every scheduled run replays the same task and context, so `context` must be self-contained; for a \"watch X until Y\" task, state the completion condition in `task` — a run that finds it met ends the schedule.",
-  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn). Propose it (steps, models, budget) for 2+ independent subtasks or a produce→verify / research→synthesize chain — never single-step (that's run_pi_minion) — and call only after the user agrees (\"use/create/run a workflow\" counts as agreement: call directly without a proposal; never call speculatively). Steps are stateless: write each task self-contained and start it with what the step does (the confirm dialog shows only its first line). Set each step's timeoutMs to the wall-clock limit that step needs. A step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; a step that fails, or that reports its packet unworkable (a one-line reason then [[STEP_BLOCKED]] alone on its last reply line), aborts the whole run — running steps cancelled, pending ones skipped — and one summary at the end starts a turn of its own with each step's TLDR inlined and a 'Needs attention' line naming the step and reason — open a reportPath only for the step whose TLDR isn't enough, never every report; track it with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll (both deferred — see the tool_search note).",
+  "run_pi_minion_workflow runs a small DAG of steps (task, model, dependsOn). Propose it (steps, models, budget) for 2+ independent subtasks or a produce→verify / research→synthesize chain — never single-step (that's run_pi_minion) — and call only after the user agrees (\"use/create/run a workflow\" counts as agreement: call directly without a proposal; never call speculatively). Steps are stateless: write each task self-contained and start it with what the step does (the confirm dialog shows only its first line). Set each step's timeoutMs to the longest stretch with no stdout output that step can legitimately produce (it bounds inactivity, not total time). A step may embed an earlier step's output as {{steps.<id>.result}} (list that id in dependsOn). Steps post no end-of-job message; a step that fails, or that reports its packet unworkable (a one-line reason then [[STEP_BLOCKED]] alone on its last reply line), aborts the whole run — running steps cancelled, pending ones skipped — and one summary at the end starts a turn of its own with each step's TLDR inlined and a 'Needs attention' line naming the step and reason — open a reportPath only for the step whose TLDR isn't enough, never every report; track it with list_pi_minion_workflows and cancel_pi_minion_workflow — don't poll (both deferred — see the tool_search note).",
   "schedule_pi_minion_workflow takes run_pi_minion_workflow's fields plus a cron expression (deferred — see the tool_search note); use only for a multi-step workflow that recurs or runs later (run_pi_minion_workflow for one-offs, schedule_pi_minion for a single recurring task); later ticks reuse the steps and context captured now, so make them self-contained — for a \"watch X until Y\" task, put the completion condition in the final step's task. The user approves once when it is scheduled, then each tick starts a fresh run (skipped while the previous run is still going) whose summary posts quietly unless the run self-stops the schedule or no step succeeded (uncancelled; then it starts a turn). It needs exactly one final step (one no other step depends on); only that step may end the schedule by finishing its reply with the stop marker; stop it with cancel_pi_minion_schedule (a run in progress is cancelled separately with cancel_pi_minion_workflow and the schedule's lastWorkflowId).",
   "All other pi-minion tools are registered but deferred — hidden from the prompt by default. Call `tool_search` (e.g. `tool_search({ query: 'pi_minion' })`) to discover and activate them on demand. Surface `tool_search` itself with `{\"defaultTools\": [\"+tool_search\"]}` in pi's settings, the `-t +tool_search` CLI flag, or by naming it directly in `defaultTools`; a project-scoped `.pi/settings.json` overrides this per project.",
   "For long-result tasks, tell the minion to lead with a concise TLDR — the posted summary may be truncated. For follow-ups, read the relevant sections of the prior report (list_pi_minions gives its reportPath) instead of reconstructing findings from memory.",
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
   "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
-  "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default, and with neither the run is unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
+  "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default (400 in the shipped config), and only with neither is the run unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
   "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
@@ -129,7 +129,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   timeoutMs: Type.Optional(
     Type.Number({
       description:
-        "Wall-clock limit in ms (run stops when it elapses); help_pi_minion prints the config default."
+        "Idle limit in ms (run stops after this long with no stdout output from the minion); help_pi_minion prints the config default."
     })
   ),
   maxTurns: Type.Optional(
@@ -137,7 +137,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
       minimum: MIN_MAX_TURNS,
       maximum: MAX_MAX_TURNS,
       description:
-        'Optional cap on assistant turns, 1..100000 (both bounds enforced): the run is cancelled as soon as turn N+1 begins, with a "maxTurns=N reached" note. Omitted = no cap of its own; the config maxTurns applies when set, otherwise the run is unlimited. A schedule pins that config default — or no cap — when it is created, so a later config edit never retargets it.'
+        'Optional cap on assistant turns, 1..100000 (both bounds enforced): the run is cancelled as soon as turn N+1 begins, with a "maxTurns=N reached" note. Omitted means the config maxTurns applies (400 in the shipped config), so omitting never silently means unlimited; the run is unlimited only when neither is set. A schedule pins that config default — or no cap — when it is created, so a later config edit never retargets it.'
     })
   )
 });
@@ -177,13 +177,13 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
     Type.Number({ description: "Cost ceiling per step (USD); defaults to the configured maxBudgetUsd." })
   ),
   timeoutMs: Type.Optional(
-    Type.Number({ description: "Default per-step wall-clock limit in ms; a step's own timeoutMs overrides it." })
+    Type.Number({ description: "Default per-step idle limit in ms (a step stops after this long with no stdout output); a step's own timeoutMs overrides it." })
   ),
   maxTurns: Type.Optional(
     Type.Integer({
       minimum: MIN_MAX_TURNS,
       maximum: MAX_MAX_TURNS,
-      description: "Default per-step turn cap, 1..100000 (both bounds enforced); a step resolves its own maxTurns, then this value, then the config maxTurns — unlimited when all are absent."
+      description: "Default per-step turn cap, 1..100000 (both bounds enforced); a step resolves its own maxTurns, then this value, then the config maxTurns (400 in the shipped config) — unlimited only when all are absent, so omitting never silently means uncapped."
     })
   ),
   steps: Type.Array(
@@ -215,7 +215,7 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
       timeoutMs: Type.Optional(
         Type.Number({
           description:
-            "Wall-clock limit for this step in ms; overrides the workflow default."
+            "Idle limit for this step in ms (stops after this long with no stdout output); overrides the workflow default."
         })
       ),
       maxTurns: Type.Optional(
@@ -223,7 +223,7 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
           minimum: MIN_MAX_TURNS,
           maximum: MAX_MAX_TURNS,
           description:
-            "Turn cap for this step, 1..100000 (both bounds enforced); resolves this value, then the workflow default, then the config maxTurns — unlimited when all are absent."
+            "Turn cap for this step, 1..100000 (both bounds enforced); resolves this value, then the workflow default, then the config maxTurns (400 in the shipped config) — unlimited only when all are absent, so omitting never silently means uncapped."
         })
       )
     }),
