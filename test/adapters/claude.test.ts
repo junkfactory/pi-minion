@@ -645,6 +645,19 @@ describe("buildArgs", () => {
     assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
+  it("uses a named agent's system prompt and narrowed tool list when the request supplies them", () => {
+    const agentPrompt = "You are a code review specialist.\n\nUse available tools as needed.";
+    const args = buildArgs(
+      fakeRequest({ systemPrompt: agentPrompt, allowedTools: ["Read"] }),
+      fakeConfig({ allowedTools: ["Bash", "Read"] })
+    );
+    assert.equal(args[args.indexOf("--append-system-prompt") + 1], agentPrompt);
+    assert.deepEqual(
+      args.slice(args.indexOf("--allowedTools"), args.indexOf("--allowedTools") + 2),
+      ["--allowedTools", "Read"]
+    );
+  });
+
   it("spreads adapterArgs.claude as the last argv entries", () => {
     const args = buildArgs(fakeRequest(), fakeConfig({ adapterArgs: { claude: { args: ["--strict-mcp-config"], preExec: [] } } }));
     assert.equal(args.at(-1), "--strict-mcp-config");

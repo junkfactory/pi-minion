@@ -166,7 +166,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
   // flag instead ("-p took \"--disable-slash-commands\" as its prompt").
   // Folding it into a single "-p=<task>" token removes the ambiguity
   // regardless of what other flags follow.
-  const task = `${MINION_PROMPT_BASE}\n\n${resolveTaskText(request)}`;
+  const task = `${request.systemPrompt ?? MINION_PROMPT_BASE}\n\n${resolveTaskText(request)}`;
   return [
     `-p=${task}`,
     "--disable-slash-commands",

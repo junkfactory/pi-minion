@@ -163,7 +163,7 @@ export function buildArgs(
     "--model",
     fmModelName(request.model),
     "--instructions",
-    MINION_PROMPT_BASE,
+    request.systemPrompt ?? MINION_PROMPT_BASE,
     // Structured output: fm prints {"result": "..."} instead of prose, which
     // is what makes parseLine able to emit a result event at all.
     "--schema",

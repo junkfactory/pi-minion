@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Check } from "typebox/value";
+import { Cron } from "croner";
 import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "../src/adapters/agy.js";
@@ -12,6 +14,7 @@ import { createFmAdapter, FM_USAGE_NOTES } from "../src/adapters/fm.js";
 import { setAdaptersForTest } from "../src/adapters/registry.js";
 import { createFakeAdapter, fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
+  buildHelpAgentList,
   buildHelpModelList,
   buildUsageNotes,
   PI_MINION_EXAMPLES,
@@ -25,6 +28,16 @@ import {
   registerTools
 } from "../src/tools.js";
 import { resolveMaxTurns } from "../src/job-runner.js";
+import { jobMeta } from "../src/job-store.js";
+import { schedules } from "../src/schedule-store.js";
+
+// Schema introspection helpers shared by the parameter-shape describes below.
+type Schema = { properties: Record<string, unknown>; required?: string[] };
+const stepSchema = (): Schema =>
+  (RUN_PI_MINION_WORKFLOW_PARAMETERS as unknown as { properties: { steps: { items: Schema } } })
+    .properties.steps.items;
+const descriptionOf = (schema: Schema, key: string): string =>
+  (schema.properties[key] as { description?: string } | undefined)?.description ?? "";
 
 describe("adapter boundary", () => {
   // AgentCliAdapter (src/adapters/types.ts) is the only published surface
@@ -243,16 +256,24 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs()), true);
   });
 
-  it("still rejects a call missing task or model", () => {
+  it("still rejects a call missing task, but takes model only from the agent", () => {
     const { task, ...withoutTask } = baseArgs();
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutTask), false);
     const { model, ...withoutModel } = baseArgs();
-    assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutModel), false);
+    // Optional in the schema so a prompt-only agent can be named instead; an
+    // omitted model with no agent still fails, but in validateRequest.
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutModel), true);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "model"), /Required unless the named `agent` supplies one/);
   });
 
-  it("rejects a call missing effort", () => {
-    const { effort, ...withoutEffort } = baseArgs();
-    assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutEffort), false);
+  it("accepts an agent, which is the only way model/effort may be omitted", () => {
+    const { model, effort, ...withoutModelEffort } = baseArgs({ agent: "code-reviewer" });
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...withoutModelEffort, agent: "code-reviewer" }), true);
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...baseArgs(), agent: 7 }), false);
+    const agent = descriptionOf(RUN_PI_MINION_PARAMETERS, "agent");
+    assert.match(agent, /help_pi_minion's `agents` list/);
+    assert.match(agent, /unknown name fails with the list of valid names/);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `agent` supplies one/);
   });
 
   it("accepts a timeoutMs and rejects a non-number", () => {
@@ -270,8 +291,7 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
   });
 
   it("describes maxTurns with the enforced bounds and the real default chain", () => {
-    type Schema = { properties: Record<string, { description?: string }> };
-    const description = (schema: Schema) => schema.properties.maxTurns!.description ?? "";
+    const description = (schema: Schema) => descriptionOf(schema, "maxTurns");
     const run = description(RUN_PI_MINION_PARAMETERS as Schema);
     assert.match(run, /1\.\.100000/);
     assert.match(run, /config maxTurns applies \(400 in the shipped config\)/);
@@ -339,12 +359,16 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, args), true);
   });
 
-  it("rejects missing context, an empty step list, or a step without effort", () => {
+  it("rejects missing context or an empty step list, but takes a step's model/effort from its agent", () => {
     const { context, ...withoutContext } = args;
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, withoutContext), false);
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [] }), false);
-    const { effort, ...stepWithoutEffort } = args.steps[0];
-    assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [stepWithoutEffort] }), false);
+    const { model, effort, ...stepWithoutModelEffort } = args.steps[0];
+    assert.equal(
+      Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...stepWithoutModelEffort, agent: "reviewer" }] }),
+      true
+    );
+    assert.match(descriptionOf(stepSchema(), "agent"), /help_pi_minion's `agents` list/);
   });
 
   it("accepts a step's own timeoutMs and a workflow-level one", () => {
@@ -398,6 +422,7 @@ describe("parameter schema shape", () => {
 
   it("pins the run schema properties and required fields", () => {
     assert.deepEqual(keys(RUN_PI_MINION_PARAMETERS), [
+      "agent",
       "context",
       "effort",
       "maxBudgetUsd",
@@ -406,7 +431,8 @@ describe("parameter schema shape", () => {
       "task",
       "timeoutMs"
     ]);
-    assert.deepEqual(required(RUN_PI_MINION_PARAMETERS), ["context", "effort", "model", "task"]);
+    // model/effort moved to optional so a named agent can supply them.
+    assert.deepEqual(required(RUN_PI_MINION_PARAMETERS), ["context", "task"]);
   });
 
   it("pins the workflow schema properties and required fields", () => {
@@ -422,8 +448,9 @@ describe("parameter schema shape", () => {
   });
 
   it("pins the workflow step properties and required fields", () => {
-    const step = RUN_PI_MINION_WORKFLOW_PARAMETERS.properties.steps.items;
+    const step = stepSchema();
     assert.deepEqual(keys(step), [
+      "agent",
       "dependsOn",
       "effort",
       "id",
@@ -433,7 +460,7 @@ describe("parameter schema shape", () => {
       "task",
       "timeoutMs"
     ]);
-    assert.deepEqual(required(step), ["effort", "id", "model", "task"]);
+    assert.deepEqual(required(step), ["id", "task"]);
   });
 
   it("pins the steer schema properties and required fields", () => {
@@ -443,6 +470,7 @@ describe("parameter schema shape", () => {
 
   it("pins the schedule schemas to the run/workflow fields plus cron", () => {
     assert.deepEqual(keys(SCHEDULE_PI_MINION_PARAMETERS), [
+      "agent",
       "context",
       "cron",
       "effort",
@@ -452,13 +480,7 @@ describe("parameter schema shape", () => {
       "task",
       "timeoutMs"
     ]);
-    assert.deepEqual(required(SCHEDULE_PI_MINION_PARAMETERS), [
-      "context",
-      "cron",
-      "effort",
-      "model",
-      "task"
-    ]);
+    assert.deepEqual(required(SCHEDULE_PI_MINION_PARAMETERS), ["context", "cron", "task"]);
     assert.deepEqual(keys(SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS), [
       "context",
       "cron",
@@ -495,6 +517,40 @@ describe("schedule cap pinning", () => {
     const pinned = pinScheduleRequest({ ...base, maxTurns: 2 }, { timeoutMs: 1_000, maxTurns: 3 });
     assert.equal(pinned.maxTurns, 2);
     assert.equal(resolveMaxTurns(pinned, { maxTurns: 99 }), 2);
+  });
+});
+
+describe("agent param", () => {
+  it("keeps the named agent on the captured schedule request, so every tick replays it", () => {
+    const pinned = pinScheduleRequest(
+      { task: "t", workspace: "/w", model: "haiku", effort: "low", agent: "code-reviewer" },
+      { timeoutMs: 1_000, maxTurns: 3 }
+    );
+    assert.equal(pinned.agent, "code-reviewer");
+  });
+
+  it("adds one help note pointing a matching task at `agent` instead of model+effort", () => {
+    const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `agent`"));
+    assert.ok(note, "PI_MINION_USAGE_NOTES carries the agent usage note");
+    assert.match(note!, /rather than picking model\+effort yourself/);
+  });
+});
+
+describe("buildHelpAgentList", () => {
+  it("lists agents from a populated dir and nothing from an empty one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-agents-"));
+    try {
+      assert.deepEqual(await buildHelpAgentList(dir), [], "an empty dir lists nothing");
+      await writeFile(
+        join(dir, "code-reviewer.md"),
+        "---\ndescription: Reviews changes for correctness\n---\n\nYou review code.\n"
+      );
+      assert.deepEqual(await buildHelpAgentList(dir), [
+        { name: "code-reviewer", description: "Reviews changes for correctness" }
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -612,7 +668,7 @@ describe("registerTools prompt footprint", () => {
     assert.match((missing.content[0] as { text: string }).text, /No running pi minion job job-missing/);
   });
 
-  it("help payload carries the model routing table", async () => {
+  it("help payload carries the model routing table and the agents list", async () => {
     const help = byName.get("help_pi_minion");
     assert.ok(help, "help_pi_minion is not registered");
     // Pin a config-bound fake so ensureRegistry() no-ops inside execute():
@@ -627,7 +683,20 @@ describe("registerTools prompt footprint", () => {
         undefined,
         {} as ExtensionToolContext
       );
-      const payload = result.details as { modelRouting?: string };
+      const payload = result.details as {
+        modelRouting?: string;
+        agents?: Array<{ name: string; description: string }>;
+        usageNotes?: string[];
+      };
+      assert.ok(Array.isArray(payload.agents), "payload.agents must be a list");
+      assert.ok(
+        payload.agents!.every((agent) => typeof agent.name === "string" && typeof agent.description === "string"),
+        "every listed agent carries a name and description"
+      );
+      assert.ok(
+        payload.usageNotes?.some((note) => note.includes("pass `agent`")),
+        "payload.usageNotes carries the agent note"
+      );
       assert.equal(typeof payload.modelRouting, "string", "payload.modelRouting must be a string");
       assert.ok(
         payload.modelRouting?.includes("**Model Routing:**"),
@@ -635,6 +704,72 @@ describe("registerTools prompt footprint", () => {
       );
     } finally {
       setAdaptersForTest();
+    }
+  });
+
+  it("schedule rows name the captured agent", async () => {
+    const list = byName.get("list_pi_minion_schedules");
+    assert.ok(list, "list_pi_minion_schedules is registered");
+    const job = new Cron("0 9 * * *", () => {});
+    schedules.set("s-agent", {
+      title: "Nightly review",
+      cron: "0 9 * * *",
+      request: {
+        task: "t",
+        workspace: "/w",
+        model: "haiku",
+        effort: "low",
+        agent: "code-reviewer"
+      },
+      effort: "low",
+      cwd: "/w",
+      sessionId: "test-session",
+      job,
+      runs: 0,
+      skipped: 0
+    });
+    try {
+      const result = await list.execute(
+        "call-list",
+        {},
+        undefined,
+        undefined,
+        { sessionManager: { getSessionId: () => "test-session" } } as unknown as ExtensionToolContext
+      );
+      const rows = result.details as { schedules: Array<{ id: string; agent?: string }> };
+      assert.equal(rows.schedules.find((row) => row.id === "s-agent")?.agent, "code-reviewer");
+    } finally {
+      schedules.delete("s-agent");
+      job.stop();
+    }
+  });
+
+  it("job rows expose the captured agent alongside the agent-led title", async () => {
+    const list = byName.get("list_pi_minions");
+    assert.ok(list, "list_pi_minions is registered");
+    jobMeta.set("j-agent", {
+      title: "reviewer: Review the diff",
+      agent: "reviewer",
+      model: "haiku",
+      prompt: "Review the diff",
+      workspace: "/w",
+      sessionId: "test-session",
+      status: "done"
+    });
+    try {
+      const result = await list.execute(
+        "call-list",
+        {},
+        undefined,
+        undefined,
+        { cwd: "/w", sessionManager: { getSessionId: () => "test-session" } } as unknown as ExtensionToolContext
+      );
+      const rows = result.details as { jobs: Array<{ id: string; title: string; agent?: string }> };
+      const row = rows.jobs.find((job) => job.id === "j-agent");
+      assert.equal(row?.agent, "reviewer");
+      assert.equal(row?.title, "reviewer: Review the diff");
+    } finally {
+      jobMeta.delete("j-agent");
     }
   });
 

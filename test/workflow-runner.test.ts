@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { after, before, afterEach, describe, it } from "node:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { MinionRequest } from "../src/adapters/types.js";
+import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { validateRequest } from "../src/job-runner.js";
+import { createFakeAdapter, fakeConfig } from "./fakes.js";
 import {
   cancelWorkflow,
   startWorkflow,
@@ -14,6 +20,7 @@ import {
   MAX_PARALLEL_STEPS,
   STEP_BLOCKED_INSTRUCTION,
   STEP_BLOCKED_MARKER,
+  newWorkflow,
   withEffectiveLimits,
   workflows,
   type MinionWorkflow
@@ -75,6 +82,18 @@ function harness(stepSpecs: Array<{ id: string; dependsOn?: string[]; task?: str
 afterEach(() => workflows.clear());
 
 describe("startWorkflow", () => {
+  it("passes a step's named agent to the job, leaving model/effort to it", async () => {
+    const h = harness([{ id: "a" }]);
+    h.wf.steps[0].agent = "code-reviewer";
+    h.wf.steps[0].model = "";
+    h.wf.steps[0].effort = "";
+    startWorkflow("wf", h.deps);
+    await h.flush();
+    assert.equal(h.started[0].request.agent, "code-reviewer");
+    assert.equal(h.started[0].request.model, "", "an explicit model must not override the agent's default");
+    assert.equal(h.started[0].request.effort, "");
+  });
+
   it("names each step job '<workflow title> › <step id>'", async () => {
     const h = harness([{ id: "a" }]);
     startWorkflow("wf", h.deps);
@@ -714,5 +733,100 @@ describe("workflow session", () => {
     await h.flush();
     assert.equal(h.started.length, 1);
     assert.equal(h.wf.session, undefined);
+  });
+});
+
+describe("scheduled agent steps", () => {
+  before(() => setAdaptersForTest([createFakeAdapter(fakeConfig())]));
+  after(() => setAdaptersForTest());
+
+  it("lets agent frontmatter beat the config defaults on a scheduled tick", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-minion-wf-agent-"));
+    try {
+      const agents = join(workspace, "agents");
+      await mkdir(agents);
+      await writeFile(
+        join(agents, "reviewer.md"),
+        "---\ndescription: Reviews changes\nmodel: opus\neffort: high\nmaxTurns: 5\nmaxBudgetUsd: 2\ntimeoutMs: 60000\n---\nYou review.\n"
+      );
+      const config = fakeConfig({ maxTurns: 400, maxBudgetUsd: 50, timeoutMs: 300_000 });
+      // As tools.ts stores a scheduled workflow: limits pinned at creation.
+      const def = withEffectiveLimits(
+        {
+          title: "T",
+          context: "No prior context.",
+          steps: [{ id: "a", task: "Review it", model: "", effort: "", agent: "reviewer" }]
+        },
+        config
+      );
+      workflows.set("wf", newWorkflow(def, { maxResultPreviewBytes: 1_000, cwd: workspace, sessionId: "s1" }));
+      const started: MinionRequest[] = [];
+      startWorkflow("wf", {
+        startStep: async (request) => {
+          started.push(request);
+          return "job-1";
+        },
+        stopStep: () => {},
+        ui: () => undefined,
+        post: () => {},
+        log: () => {}
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      const valid = await validateRequest(started[0]!, workspace, config, agents);
+      assert.deepEqual(
+        [valid.model, valid.effort, valid.maxTurns, valid.maxBudgetUsd, valid.timeoutMs],
+        ["opus", "high", 5, 2, 60_000],
+        "frontmatter beats the config defaults 400 / 50 / 300000"
+      );
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the no-cap sentinel on non-agent steps of a mixed scheduled def", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pi-minion-wf-mixed-"));
+    try {
+      const agents = join(workspace, "agents");
+      await mkdir(agents);
+      await writeFile(
+        join(agents, "reviewer.md"),
+        "---\ndescription: Reviews changes\nmodel: opus\neffort: high\n---\nYou review.\n"
+      );
+      // No config.maxTurns anywhere: the plain step's pinned sentinel (null)
+      // must survive the step request's lookup — `step.maxTurns ?? wf.maxTurns`
+      // would drop it and let a later config edit retarget the step.
+      const config = fakeConfig();
+      const def = withEffectiveLimits(
+        {
+          title: "T",
+          context: "No prior context.",
+          steps: [
+            { id: "agent-step", task: "Review it", model: "", effort: "", agent: "reviewer" },
+            { id: "plain", task: "Do a thing", model: "sonnet", effort: "medium" }
+          ]
+        },
+        config
+      );
+      assert.equal(def.maxTurns, undefined);
+      assert.equal(def.steps[0].maxTurns, undefined);
+      assert.equal(def.steps[1].maxTurns, null, "non-agent step keeps the null sentinel");
+      workflows.set("wf", newWorkflow(def, { maxResultPreviewBytes: 1_000, cwd: workspace, sessionId: "s1" }));
+      const started: MinionRequest[] = [];
+      startWorkflow("wf", {
+        startStep: async (request) => {
+          started.push(request);
+          return "job-1";
+        },
+        stopStep: () => {},
+        ui: () => undefined,
+        post: () => {},
+        log: () => {}
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(started[0].maxTurns, undefined, "agent step: no pinned cap");
+      assert.equal(started[1].maxTurns, null, "plain step: sentinel survives the step request");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 });

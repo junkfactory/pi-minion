@@ -19,6 +19,7 @@ import {
   loadConfig,
   readPromptConfigSync
 } from "./config.js";
+import { AGENT_DIR, listAgents, type AgentSummary } from "./agents.js";
 import { confirmWorkflow } from "./agent.ui.js";
 import { startWorkflowSession } from "./child-session.js";
 import { glyph } from "./glyphs.js";
@@ -63,6 +64,7 @@ import {
   MAX_WORKFLOW_STEPS,
   newWorkflow,
   resolveOwnedWorkflow,
+  agentDefaultBudgetSteps,
   unenforcedStepIds,
   withEffectiveLimits,
   isWorkflowRunning,
@@ -102,6 +104,7 @@ export const PI_MINION_USAGE_NOTES = [
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
   "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
   "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default (400 in the shipped config), and only with neither is the run unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
+  "when a task matches a listed agent's responsibility, pass `agent` rather than picking model+effort yourself: the agent supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win.",
   "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
@@ -109,14 +112,24 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   task: Type.String({
     description: "The task to delegate without narrowing its scope."
   }),
-  model: Type.String({
-    description:
-      "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id."
-  }),
-  effort: Type.String({
-    description:
-      "Required: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency)."
-  }),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `agent` supplies one; explicit wins over the agent's default."
+    })
+  ),
+  effort: Type.Optional(
+    Type.String({
+      description:
+        "Required unless the named `agent` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency)."
+    })
+  ),
+  agent: Type.Optional(
+    Type.String({
+      description:
+        "Optional: name a specialized agent from help_pi_minion's `agents` list — it supplies a curated system prompt and model/effort defaults; explicit model/effort still win. Names come only from that list; an unknown name fails with the list of valid names attached."
+    })
+  ),
   context: Type.String({
     description:
       'Required evidence for this task — task-relevant, passed verbatim with file paths, not the entire report; an earlier job id alone is not enough since this job cannot look it up ("No prior context." alone if fresh — never mixed with other details).'
@@ -137,7 +150,7 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
       minimum: MIN_MAX_TURNS,
       maximum: MAX_MAX_TURNS,
       description:
-        'Optional cap on assistant turns, 1..100000 (both bounds enforced): the run is cancelled as soon as turn N+1 begins, with a "maxTurns=N reached" note. Omitted means the config maxTurns applies (400 in the shipped config), so omitting never silently means unlimited; the run is unlimited only when neither is set. A schedule pins that config default — or no cap — when it is created, so a later config edit never retargets it.'
+        'Optional cap on assistant turns, 1..100000 (both bounds enforced): the run is cancelled as soon as turn N+1 begins, with a "maxTurns=N reached" note. Omitted means the config maxTurns applies (400 in the shipped config), so omitting never silently means unlimited; the run is unlimited only when neither is set. A non-agent schedule pins that config default — or no cap — when it is created, so a later config edit never retargets it. An `agent` schedule instead re-reads the agent file and the config defaults each tick, so only an explicit caller value stays pinned.'
     })
   )
 });
@@ -195,14 +208,24 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
         description:
           "Self-contained task; {{steps.<id>.result}} placeholders must list that id in dependsOn."
       }),
-      model: Type.String({
-        description:
-          "A model usable on this machine; call help_pi_minion to list them."
-      }),
-      effort: Type.String({
-        description:
-          "Required: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes."
-      }),
+      model: Type.Optional(
+        Type.String({
+          description:
+            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `agent` supplies one; explicit wins over the agent's default."
+        })
+      ),
+      effort: Type.Optional(
+        Type.String({
+          description:
+            "Required unless this step's `agent` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes."
+        })
+      ),
+      agent: Type.Optional(
+        Type.String({
+          description:
+            "Optional: name a specialized agent from help_pi_minion's `agents` list — curated system prompt plus model/effort defaults; explicit model/effort still win. Names come only from that list; an unknown name fails with the list of valid names attached."
+        })
+      ),
       dependsOn: Type.Optional(
         Type.Array(Type.String(), {
           description:
@@ -236,11 +259,31 @@ export const SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
   cron: SCHEDULE_PI_MINION_PARAMETERS.properties.cron
 });
 
+// model/effort are optional in the tool schemas so a named agent can supply
+// them (validateRequest merges the agent's defaults). The stored request and
+// workflow shapes are string-typed, where "" defers to the agent.
+function withAgentDefaults<T extends { model?: string; effort?: string }>(
+  request: T
+): T & { model: string; effort: string } {
+  return { ...request, model: request.model ?? "", effort: request.effort ?? "" };
+}
+
+// A workflow call after withAgentDefaults: same schema fields, with the
+// step's model/effort present as strings.
+type WorkflowRequest = Static<typeof RUN_PI_MINION_WORKFLOW_PARAMETERS>;
+type NormalizedWorkflowRequest = Omit<WorkflowRequest, "steps"> & {
+  steps: Array<WorkflowRequest["steps"][number] & { model: string; effort: string }>;
+};
+
+function normalizeWorkflowRequest(request: WorkflowRequest): NormalizedWorkflowRequest {
+  return { ...request, steps: request.steps.map((step) => withAgentDefaults(step)) };
+}
+
 // Every step is validated before any dialog, so a bad model fails before the
 // user is asked anything. `timeoutMs` resolves step ?? workflow, the same value
 // startStep passes on, so a limit rejected at spawn is rejected here first.
 export async function validateWorkflowSteps(
-  request: Static<typeof RUN_PI_MINION_WORKFLOW_PARAMETERS>,
+  request: NormalizedWorkflowRequest,
   cwd: string,
   config: Awaited<ReturnType<typeof loadConfig>>
 ): Promise<void> {
@@ -257,6 +300,7 @@ export async function validateWorkflowSteps(
           task: step.task,
           model: step.model,
           effort: step.effort,
+          agent: step.agent,
           context: request.context,
           maxBudgetUsd: step.maxBudgetUsd ?? request.maxBudgetUsd,
           timeoutMs: step.timeoutMs ?? request.timeoutMs,
@@ -345,7 +389,7 @@ function declinedResult(what: string, message?: string) {
 // validate every step, then ask the user. `declined` carries their optional reason.
 async function confirmWorkflowRequest(
   toolName: string,
-  request: Static<typeof RUN_PI_MINION_WORKFLOW_PARAMETERS>,
+  request: NormalizedWorkflowRequest,
   ctx: ExtensionContext,
   // Scheduled workflows only; may throw (e.g. a bad cron) before the dialog.
   scheduleLines?: (config: MinionConfig) => string[]
@@ -394,6 +438,13 @@ async function confirmWorkflowRequest(
 // just dedups across adapters; everything else lives in the adapters.
 export function buildHelpModelList(adapters: AgentCliAdapter[]): string[] {
   return [...new Set(adapters.flatMap((adapter) => adapter.availableModels()))];
+}
+
+// help_pi_minion's `agents` list, same seam as buildHelpModelList: an
+// overridable directory keeps a populated/empty agent dir testable without
+// touching the user's real one.
+export function buildHelpAgentList(dir: string = AGENT_DIR): Promise<AgentSummary[]> {
+  return listAgents(dir);
 }
 
 // help_pi_minion's usage notes: shared constants, then every REGISTERED
@@ -460,8 +511,16 @@ export function registerTools(pi: ExtensionAPI): void {
       // case differences, a subdirectory instead of the root) that surfaced
       // as an intermittent "workspace must be the current Pi workspace"
       // error. Filling it in here makes that whole failure class impossible.
+      // Validated here first so a named agent's model/effort defaults are
+      // resolved before the job starts (and named in the reply), not only
+      // inside startJob's own validation.
+      const validated = await validateRequest(
+        { ...withAgentDefaults(request), workspace: ctx.cwd },
+        ctx.cwd,
+        await loadConfig()
+      );
       const id = await startJob(
-        { ...request, workspace: ctx.cwd },
+        validated,
         ctx.cwd,
         ctx.sessionManager.getSessionId(),
         ctx.sessionManager.getSessionFile(),
@@ -469,7 +528,7 @@ export function registerTools(pi: ExtensionAPI): void {
         getJobUI(ctx)
       );
       return textResult(
-        `Pi minion job ${id} (${request.model}) is running in the background. Its result will post automatically to this transcript when it finishes — don't poll; track it only with list_pi_minions and cancel_pi_minion.`,
+        `Pi minion job ${id} (${validated.model}) is running in the background. Its result will post automatically to this transcript when it finishes — don't poll; track it only with list_pi_minions and cancel_pi_minion.`,
         { id }
       );
     }
@@ -545,7 +604,7 @@ export function registerTools(pi: ExtensionAPI): void {
     exposure: "deferred",
     label: "List Pi Minions",
     description:
-      "List this session's pi-minion jobs (running, plus finished jobs retained for the prune window — pruned on the next run): id, title, model, effort, status, reportPath. Retrieve a job id or a finished job's reportPath for a follow-up's `context`.",
+      "List this session's pi-minion jobs (running, plus finished jobs retained for the prune window — pruned on the next run): id, title, agent, model, effort, status, reportPath. Retrieve a job id or a finished job's reportPath for a follow-up's `context`.",
     promptSnippet:
       "List this session's running and recently finished pi-minion jobs",
     parameters: Type.Object({}),
@@ -555,6 +614,7 @@ export function registerTools(pi: ExtensionAPI): void {
         (meta) => ({
           id: meta.id,
           title: meta.title,
+          agent: meta.agent,
           model: meta.resolvedModel ?? meta.model,
           effort: meta.effort,
           status: meta.status,
@@ -584,7 +644,7 @@ export function registerTools(pi: ExtensionAPI): void {
       // Validate up front so a bad model/context fails now, not on the first tick.
       const config = await loadConfig();
       const request = await validateRequest(
-        { ...rest, workspace: ctx.cwd },
+        { ...withAgentDefaults(rest), workspace: ctx.cwd },
         ctx.cwd,
         config
       );
@@ -612,9 +672,13 @@ export function registerTools(pi: ExtensionAPI): void {
         try {
           // Read from the schedule, not this closure: rehomeSchedules moves
           // it to the replacement session after /new, fork, or resume, and
-          // the request's timeoutMs is pinned at creation.
+          // explicit timeoutMs/maxTurns are pinned at creation. Agent
+          // schedules replay the raw pre-merge request (rawRequest) so
+          // frontmatter edits reach the next tick; startJob re-validates
+          // either way.
+          const base = schedule.rawRequest ?? schedule.request;
           const jobId: string = await startJob(
-            { ...schedule.request, task: schedule.request.task + STOP_SCHEDULE_INSTRUCTION },
+            { ...base, workspace: schedule.cwd, task: base.task + STOP_SCHEDULE_INSTRUCTION },
             schedule.cwd,
             schedule.sessionId,
             schedule.sessionFile,
@@ -633,6 +697,9 @@ export function registerTools(pi: ExtensionAPI): void {
           );
           schedule.lastJobId = jobId;
           schedule.lastRun = jobMeta.get(schedule.lastJobId);
+          // The merged effort, not the one pinned at creation: a frontmatter
+          // edit lands on the next row render.
+          schedule.effort = jobMeta.get(jobId)?.effort ?? schedule.effort;
           schedule.runs++;
         } catch (error) {
           notify(
@@ -644,6 +711,11 @@ export function registerTools(pi: ExtensionAPI): void {
         title,
         cron,
         request: pinScheduleRequest(request, config),
+        // Raw pre-merge capture so agent-frontmatter edits reach future
+        // ticks; only stored when an agent actually applies.
+        rawRequest: rest.agent?.trim()
+          ? { ...withAgentDefaults(rest), workspace: ctx.cwd }
+          : undefined,
         effort: request.effort,
         cwd: ctx.cwd,
         sessionId,
@@ -677,11 +749,14 @@ export function registerTools(pi: ExtensionAPI): void {
       const relevant = scheduleIdsOwnedBySession(schedules, sessionId).map(
         (id) => {
           const schedule = schedules.get(id)!;
+          // A workflow schedule names agents per step instead.
+          const agent = schedule.kind === "workflow" ? undefined : schedule.request.agent;
           return {
             id,
             title: schedule.title,
             cron: schedule.cron,
             kind: schedule.kind ?? "job",
+            agent,
             model: scheduleModel(schedule),
             effort: schedule.effort,
             nextRun: schedule.job.nextRun()?.toISOString(),
@@ -781,7 +856,8 @@ export function registerTools(pi: ExtensionAPI): void {
       formatCostGate(promptConfig.costGate)
     ].filter(Boolean),
     parameters: RUN_PI_MINION_WORKFLOW_PARAMETERS,
-    async execute(_toolCallId, request, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, raw, _signal, _onUpdate, ctx) {
+      const request = normalizeWorkflowRequest(raw);
       const confirmed = await confirmWorkflowRequest(
         "run_pi_minion_workflow",
         request,
@@ -819,7 +895,8 @@ export function registerTools(pi: ExtensionAPI): void {
       "Fits 'run a workflow that recurs or runs later'."
     ],
     parameters: SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS,
-    async execute(_toolCallId, { cron, ...request }, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, { cron, ...raw }, _signal, _onUpdate, ctx) {
+      const request = normalizeWorkflowRequest(raw);
       const confirmed = await confirmWorkflowRequest(
         "schedule_pi_minion_workflow",
         request,
@@ -833,7 +910,8 @@ export function registerTools(pi: ExtensionAPI): void {
             new Cron(cron).nextRun(),
             workflowBudget(request, config),
             new Date(),
-            unenforcedStepIds(request).length
+            unenforcedStepIds(request).length,
+            agentDefaultBudgetSteps(request)
           );
         }
       );
@@ -962,6 +1040,7 @@ export function registerTools(pi: ExtensionAPI): void {
       );
       const payload = {
         models: buildHelpModelList(listAdapters()),
+        agents: await buildHelpAgentList(),
         examples: PI_MINION_EXAMPLES,
         usageNotes: buildUsageNotes(listAdapters(), config),
         modelRouting: formatRoutingTable(promptConfig.routingTable),

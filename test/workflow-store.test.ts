@@ -12,6 +12,7 @@ import {
   formatWorkflowPlan,
   formatWorkflowScheduleLines,
   isWorkflowRunning,
+  newWorkflow,
   pruneWorkflows,
   formatWorkflowSummary,
   MAX_WORKFLOW_STEPS,
@@ -191,6 +192,52 @@ describe("referencedStepIds", () => {
   });
 });
 
+describe("agent steps", () => {
+  const step = (value: WorkflowStepDef) => value;
+  const env = { maxResultPreviewBytes: 1_000, cwd: "/w", sessionId: "s1" };
+
+  it("keeps a step's named agent in the captured definition (ticks replay it)", () => {
+    const wf = newWorkflow(
+      {
+        title: "Review",
+        context: "c",
+        steps: [step({ id: "a", task: "Review", model: "", effort: "", agent: "code-reviewer" })]
+      },
+      env
+    );
+    assert.equal(wf.steps[0].agent, "code-reviewer");
+    assert.equal(wf.steps[0].model, "");
+  });
+
+  it("shows the agent in the confirm row when the step's model comes from it", () => {
+    const { lines } = formatWorkflowConfirm(
+      {
+        title: "T",
+        context: "c",
+        steps: [step({ id: "a", task: "Review the diff", model: "", effort: "", agent: "code-reviewer" })]
+      },
+      config,
+      undefined,
+      () => true
+    );
+    assert.match(plain(lines), /• a: Review the diff — agent code-reviewer · ≤ agent default timeout/);
+  });
+
+  it("shows the agent alongside an explicit model and effort", () => {
+    const { lines } = formatWorkflowConfirm(
+      {
+        title: "T",
+        context: "c",
+        steps: [step({ id: "a", task: "Review the diff", model: "sonnet", effort: "high", agent: "code-reviewer" })]
+      },
+      config,
+      undefined,
+      () => true
+    );
+    assert.match(plain(lines), /• a: Review the diff — sonnet, high effort, agent code-reviewer · ≤ agent default timeout/);
+  });
+});
+
 const plain = (lines: Array<Array<{ text: string }>>) =>
   lines.map((line) => line.map((seg) => seg.text).join("")).join("\n");
 
@@ -254,6 +301,18 @@ describe("formatWorkflowConfirm", () => {
 });
 
 describe("budget display with unenforced adapters", () => {
+  it("excludes agent-default budgets from the total and labels them", () => {
+    const workflow = {
+      title: "T",
+      context: "c",
+      steps: def({ id: "a", agent: "reviewer", model: "", effort: "high" }, { id: "b", maxBudgetUsd: 2 })
+    };
+    // The agent step's budget lives in its agent file, re-read each tick.
+    assert.equal(workflowBudget(workflow, config, () => true), 2);
+    const { title, lines } = formatWorkflowConfirm(workflow, config, undefined, () => true);
+    assert.equal(title, "T — 2 pi minions in 1 stage, budget cap $2.00 + 1 agent-default budget step");
+    assert.match(plain(lines), /• a: .*· ≤ agent default timeout/);
+  });
   const steps = def({ id: "a", maxBudgetUsd: 2 }, { id: "b", model: "gpt-5" }, { id: "c", model: "gpt-5", maxBudgetUsd: 9 });
   const enforces = (model: string) => model !== "gpt-5";
   const workflow = { title: "T", context: "c", steps };
@@ -330,6 +389,65 @@ describe("withEffectiveLimits", () => {
       { ...config, maxTurns: 9 }
     );
     assert.equal(workflowBeatsConfig.steps[0].maxTurns, 7);
+  });
+
+  it("pins only explicit limits for an agent step, so the tick's frontmatter merge wins over config", () => {
+    const configDefaults = { maxBudgetUsd: 5, timeoutMs: 600_000, maxTurns: 9 };
+    const pinned = withEffectiveLimits(
+      {
+        title: "T",
+        context: "c",
+        steps: def({ id: "a", agent: "reviewer", model: "", effort: "" })
+      },
+      configDefaults
+    );
+    // Config-only values stay undefined: the tick re-merges the agent file,
+    // and frontmatter outranks the config default. The workflow-level pin must
+    // not fall back to the config either (it would mask the same frontmatter).
+    assert.equal(pinned.steps[0].maxBudgetUsd, undefined);
+    assert.equal(pinned.steps[0].timeoutMs, undefined);
+    assert.equal(pinned.steps[0].maxTurns, undefined);
+    assert.equal(pinned.maxTurns, undefined);
+
+    // Values the definition names explicitly stay pinned, agent step included.
+    const explicit = withEffectiveLimits(
+      {
+        title: "T",
+        context: "c",
+        maxBudgetUsd: 3,
+        timeoutMs: 30_000,
+        maxTurns: 7,
+        steps: def(
+          { id: "a", agent: "reviewer", model: "", effort: "" },
+          { id: "b", maxBudgetUsd: 1, timeoutMs: 2_000 }
+        )
+      },
+      configDefaults
+    );
+    assert.deepEqual(
+      explicit.steps.map((step) => [step.maxBudgetUsd, step.timeoutMs, step.maxTurns]),
+      [
+        [3, 30_000, 7],
+        [1, 2_000, 7]
+      ]
+    );
+    assert.equal(explicit.maxTurns, 7);
+  });
+
+  it("keeps the no-cap sentinel on non-agent steps of a mixed def", () => {
+    // config has no maxTurns here, so the plain step pins the null sentinel —
+    // which the runner must pass through as a value, not drop via `??`.
+    const mixed = withEffectiveLimits(
+      {
+        title: "T",
+        context: "c",
+        steps: def({ id: "a", agent: "reviewer", model: "", effort: "" }, { id: "b" })
+      },
+      config
+    );
+    assert.equal(mixed.maxTurns, undefined, "def-level pin stays explicit-only with an agent step");
+    assert.equal(mixed.steps[0].maxTurns, undefined, "agent step: frontmatter re-reads at tick");
+    assert.equal(mixed.steps[1].maxTurns, null, "non-agent step keeps the null sentinel");
   });
 
   it("rejects an invalid workflow-level maxTurns even when every step overrides it", () => {

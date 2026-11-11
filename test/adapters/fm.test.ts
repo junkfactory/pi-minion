@@ -112,6 +112,12 @@ describe("buildArgs", () => {
     assert.ok(args.includes("--schema"));
   });
 
+  it("uses a named agent's system prompt as --instructions when the request supplies one", () => {
+    const agentPrompt = "You are a code review specialist.\n\nUse available tools as needed.";
+    const args = buildArgs(fakeRequest({ systemPrompt: agentPrompt }), fakeConfig());
+    assert.equal(flagValue(args, "--instructions"), agentPrompt);
+  });
+
   it("points --schema at the bundled schema file, content-matched to the expected schema", () => {
     const schemaPath = flagValue(buildArgs(fakeRequest(), fakeConfig()), "--schema");
     assert.ok(schemaPath, "--schema missing");

@@ -55,7 +55,7 @@ model vaguely, surface similar ids from that list for them to approve.
 ### Delegate a task
 
 **`run_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
-maxTurns?)`** — spawn a background job. The adapter that owns the requested
+maxTurns?, agent?)`** — spawn a background job. The adapter that owns the requested
 model runs it (`pi`, `claude`, `agy`, or `fm`, per the model registry), as a
 child process, and the call returns a job ID immediately, so your session
 keeps working while the minion runs. The result arrives later as a transcript
@@ -120,7 +120,7 @@ follow-up run instead of steering a finished job.
 ### Schedule jobs
 
 **`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
-maxTurns?, cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
+maxTurns?, agent?, cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
 [croner](https://github.com/hexagon/croner)).
 
 - Each tick spawns an ordinary `run_pi_minion` job; its result posts to the
@@ -151,7 +151,7 @@ workflow schedule).
 
 **`run_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?,
 maxTurns?, steps)`** — run a small dependency graph of minion jobs: `steps: [{
-id, task, model, effort, dependsOn?, maxBudgetUsd?, timeoutMs?, maxTurns? }]`,
+id, task, model, effort, dependsOn?, maxBudgetUsd?, timeoutMs?, maxTurns?, agent? }]`,
 at most 10, up to 4 running at once. A step
 starts as soon as its `dependsOn` steps are done and receives their results.
 
@@ -166,6 +166,9 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   on "No"; declining runs nothing, and a session without a UI refuses.
 - The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
   on pi, agy, or fm are marked "no cost ceiling" and counted separately.
+  A step whose model comes from an agent default is optimistically counted as
+  enforcing at dialog time — the real adapter, and thus the marking, is only
+  known once the step starts.
 - `maxTurns` resolves per step, then the workflow-level value, then the config
   default (400 in the shipped config) — unlimited only when none is set, so
   omitting it never silently means uncapped. Like `timeoutMs`, the more
@@ -223,14 +226,85 @@ from 1 to 100000, unlimited when all are absent).
   marks scheduled-workflow rows `⏱⇉`, and `cancel_pi_minion_schedule` stops future ticks.
   A session without a UI refuses.
 
+### Specialized agents
+
+A specialized agent is one markdown file under
+`~/.pi/agent/pi-minion/agents/` (per user, not per project). The filename stem
+is the name (`code-review.md` → `agent: "code-review"`), so it must be
+kebab-case; only `.md` files are read. The body is the minion's system prompt,
+and the shared operational tail (untrusted-data rule, orchestrator output
+budget, headless note) is still appended — it replaces the generic "independent
+pi minion" identity line rather than adding to it.
+
+```markdown
+---
+description: Reviews changes for correctness and security
+model: sonnet
+effort: high
+tools: [Bash, Read, Grep]
+maxTurns: 100
+maxBudgetUsd: 2
+timeoutMs: 600000
+---
+
+You are a code review specialist. Report real bugs, not style nits.
+```
+
+| Frontmatter    | Required | Type / range                         | Meaning                                                                                                    |
+|:---------------|:---------|:-------------------------------------|:-----------------------------------------------------------------------------------------------------------|
+| `description`  | yes      | non-empty string                     | One line shown in `help_pi_minion`'s `agents` list                                                         |
+| `model`        | no       | non-empty string                     | Default model: a family alias or concrete CLI id, passed verbatim to the CLI (each CLI resolves its own).  |
+| `effort`       | no       | non-empty string                     | Default effort, same levels as the `effort` tool param.                                                    |
+| `tools`        | no       | string array or comma-separated text | Narrows `config.allowedTools` (see below).                                                                 |
+| `maxTurns`     | no       | whole number 1..100000               | Default turn cap.                                                                                          |
+| `maxBudgetUsd` | no       | positive number                      | Default cost ceiling (for adapters that enforce one).                                                      |
+| `timeoutMs`    | no       | positive number ≤ 2147483647         | Default idle timeout.                                                                                      |
+
+Keys beyond this table are ignored. An invalid file — bad YAML, missing or
+blank `description`, empty body, wrong type, or a non-kebab-case filename — is
+skipped with an `agent_invalid` lifecycle-log line, so one broken file never
+hides the rest. The directory is rescanned on every request (no cache): an
+edit applies to the next run you start, and to an existing schedule's next
+tick — a schedule with `agent` replays the raw pre-merge request, so
+frontmatter `model`/`effort`/limit edits reach the next tick (values you
+passed explicitly stay pinned). For agent schedules, the config defaults for
+`timeoutMs`/`maxTurns` are also re-read each tick (frontmatter beats config;
+explicit values stay pinned). Deleting the agent file makes the next tick
+fail to start with an instructive error.
+
+- Pass `agent` on `run_pi_minion`, `schedule_pi_minion`, or a workflow step.
+  With an agent, `model`/`effort` may be omitted when the file supplies them.
+  `help_pi_minion` lists available agents as `agents: [{name, description}]`;
+  unknown names fail with the available names attached.
+- Precedence per field: explicit call param > frontmatter > `pi-minion.json`
+  default. `model`/`effort` have no config default, so an agent that defines
+  neither and a call that passes neither is rejected with an error naming the
+  agent and pointing at `help_pi_minion`'s models.
+- `tools` can only narrow: the effective list is the agent's entries
+  intersected with `config.allowedTools` (minimatch globs). An empty
+  intersection is rejected — never silently widened, since for claude an empty
+  `--allowedTools` means unrestricted. Without frontmatter `tools`,
+  `config.allowedTools` applies unchanged; with an empty `config.allowedTools`
+  (no allowlist), the agent's list is used as written. Only the claude adapter
+  consumes this list: on any other adapter `tools` is ignored (logged as
+  `agent_tools_ignored`), and `tools: []` is only an error for claude.
+- The merged model still passes the provider/model allowlists and the cost
+  gate; an agent cannot launder a gated model past them.
+- A job started with an agent is titled and recorded `<agent>: <title>`
+  (instead of the model), sub-sessions are named `<agent>: <name>`, schedule
+  picker rows prefix `<agent> agent ·`, and a workflow step names its agent
+  (`agent <name>`) in the confirm dialog, and in the plan/picker rows when no
+  model is set. Agent files are never modified by pi-minion.
+
 ### In the UI
 
 **`/pi-minions` command (default key `alt+j`, see `shortcut` in
 `pi-minion.json`)** — opens a picker over currently running jobs (including
 runs started by a schedule), then a scrollable detail modal with the job's
 full streamed output. This session's schedules are listed after them as
-`⏱ <title> · <model> / <effort> · <cron> · next <time>`; picking one asks to
-stop it. Running workflows are listed first as
+`⏱ <title> · <model> / <effort> · <cron> · next <time>` (prefixed with
+`<agent> agent ·` when the schedule names an agent); picking one asks to stop
+it. Running workflows are listed first as
 `⇉ <title> · <done>/<total> steps · <running step ids>`; picking one asks to
 cancel it.
 

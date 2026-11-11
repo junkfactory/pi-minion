@@ -259,6 +259,7 @@ process.env.PATH = `${bin}:${realPath}`;
 const { startJob, validateRequest } = await import("../src/job-runner.js");
 const { validateWorkflowSteps } = await import("../src/tools.js");
 const { JOB_ROOT, bindSessionApi, jobMeta, jobs, markJobFinished, pruneOldJobs, steerJob, stopJob } = await import("../src/job-store.js");
+const { LOG_PATH } = await import("../src/log.js");
 const { startWorkflowSession } = await import("../src/child-session.js");
 const { setAdaptersForTest } = await import("../src/adapters/registry.js");
 const { createClaudeAdapter, userMessageFrame } = await import("../src/adapters/claude.js");
@@ -494,6 +495,89 @@ describe("startJob", () => {
     process.env.PATH = realPath;
     for (const job of jobs.values()) job.stop();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("records the agent-merged model/effort for a job started with empty ones", async () => {
+    // The agent dir is the real one under the temp HOME startJob resolves
+    // against (startJob threads it to validateRequest as its agentDir seam;
+    // the injected-seam path itself is covered by the test below).
+    const agentDir = join(home, ".pi", "agent", "pi-minion", "agents");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(agentDir, "reviewer.md"),
+      "---\ndescription: Reviews changes\nmodel: sonnet\neffort: high\nmaxBudgetUsd: 2\n---\nYou review.\n"
+    );
+    try {
+      const { sessionId, posts } = newSession();
+      const id = await startJob(
+        { task: "Do a thing MODE:ok", workspace, model: "", effort: "", agent: "reviewer" },
+        workspace,
+        sessionId,
+        undefined,
+        noop,
+        fakeUI
+      );
+      // The raw request carries "" for both; jobMeta must record what runs.
+      assert.equal(jobMeta.get(id)?.model, "sonnet");
+      assert.equal(jobMeta.get(id)?.effort, "high");
+      await waitFor(() => readFileSync(LOG_PATH, "utf8").includes(`status=started job_id=${id}`));
+      assert.match(
+        readFileSync(LOG_PATH, "utf8"),
+        new RegExp(`status=started job_id=${id} model=sonnet`)
+      );
+      await waitFor(() => jobMeta.get(id)?.status === "done");
+      // The display/session surfaces use the merged values too: the posted
+      // frontmatter carries the merged effort, and the child session keeps
+      // its thinking level instead of dropping it for a blank raw effort.
+      await waitFor(() => posts.length > 0);
+      assert.match(posts[0].content, /model: \S+ \(high\)/);
+      // The result frontmatter reports the budget actually enforced: the
+      // merged frontmatter value, not the config default (5).
+      assert.match(posts[0].content, /budget_usd: \\\$2\n/);
+      const sessionsDir = join(home, ".pi", "agent", "sessions", "pi-minion");
+      const childTexts = readdirSync(sessionsDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .flatMap((m) =>
+          readdirSync(join(sessionsDir, m.name)).map((f) =>
+            readFileSync(join(sessionsDir, m.name, f), "utf8")
+          )
+        );
+      const child = childTexts.find((text) => text.includes("Do a thing MODE:ok"));
+      assert.ok(child, "child session written");
+      assert.match(child, /"thinkingLevel":"high"/);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes agent diagnostics through startJob's injected agentDir/log seams", async () => {
+    const agentDir = join(root, "agents-bad");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "bad.md"), "# no frontmatter\n");
+    const events: string[] = [];
+    try {
+      const { sessionId } = newSession();
+      await assert.rejects(
+        startJob(
+          { task: "Do a thing MODE:ok", workspace, model: "", effort: "", agent: "bad" },
+          workspace,
+          sessionId,
+          undefined,
+          noop,
+          fakeUI,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          agentDir,
+          (event, info) => events.push(`${event} ${info.id}`)
+        ),
+        /Unknown agent "bad"/
+      );
+      assert.equal(events.filter((line) => line.startsWith("agent_invalid")).length, 1);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("plain job posts the full result with triggerTurn and writes result.md", async () => {

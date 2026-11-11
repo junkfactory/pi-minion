@@ -8,7 +8,7 @@ import { startWorkflowSession, writeChildSession } from "../src/child-session.js
 describe("writeChildSession", () => {
   const base = {
     cwd: "/w",
-    name: "sonnet: Review the diff",
+    name: "Review the diff",
     prompt: "Review the diff",
     resultText: "LGTM",
     provider: "claude",
@@ -49,8 +49,7 @@ describe("writeChildSession", () => {
       assert.equal(entries[0].cwd, "/w");
       assert.equal(entries.find((e) => e.type === "thinking_level_change").thinkingLevel, "high");
       assert.equal(entries.find((e) => e.type === "session_info").name, "sonnet: Review the diff");
-      const messages = entries.filter((e) => e.type === "message").map((e) => e.message);
-      assert.equal(messages[0].role, "user");
+      const messages = entries.filter((e) => e.type === "message").map((e) => e.message);      assert.equal(messages[0].role, "user");
       assert.deepEqual(
         messages.slice(1).map((m) => [m.provider, m.model, m.timestamp, m.usage.cost.total, m.content.length]),
         [
@@ -60,6 +59,17 @@ describe("writeChildSession", () => {
       );
       assert.equal(messages[2].content[0].text, "LGTM");
       assert.equal(messages[1].usage.cacheRead, 1000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the session after the agent when one is set", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-child-"));
+    try {
+      const file = writeChildSession({ ...base, agent: "reviewer", usageRoot: dir });
+      const entries = await readEntries(file!);
+      assert.equal(entries.find((e) => e.type === "session_info").name, "reviewer: Review the diff");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

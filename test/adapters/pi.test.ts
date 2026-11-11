@@ -280,6 +280,12 @@ describe("buildArgs", () => {
     assert.match(systemPrompt, /covering outcome, key findings or changed files, verification .*?blockers/);
   });
 
+  it("uses a named agent's system prompt when the request supplies one", () => {
+    const agentPrompt = "You are a code review specialist.\n\nUse available tools as needed.";
+    const args = buildArgs(fakeRequest({ systemPrompt: agentPrompt }), fakeConfig());
+    assert.equal(flagValue(args, "--append-system-prompt"), agentPrompt);
+  });
+
   it("keeps the task out of argv — it travels over stdin instead", () => {
     const args = buildArgs(fakeRequest({ task: "-x do it", context: "some evidence" }), fakeConfig());
     assert.ok(!args.includes("--"));

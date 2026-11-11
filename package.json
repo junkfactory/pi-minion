@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "croner": "^10.0.1",
-    "minimatch": "^10.2.6"
+    "minimatch": "^10.2.6",
+    "yaml": "2.9.1"
   }
 }

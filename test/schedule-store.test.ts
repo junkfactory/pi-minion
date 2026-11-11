@@ -88,6 +88,13 @@ describe("formatScheduleLabel", () => {
       "⏱ Nightly review · claude-haiku-4-5 / medium · 0 9 * * 1-5 · next 09:00"
     );
   });
+
+  it("names the agent when the schedule captured one", () => {
+    assert.equal(
+      formatScheduleLabel({ ...schedule, request: { ...schedule.request, agent: "code-reviewer" } }, next, undefined, now),
+      "⏱ Nightly review · code-reviewer agent · haiku / medium · 0 9 * * 1-5 · next 09:00"
+    );
+  });
 });
 
 describe("scheduleResolvedModel", () => {

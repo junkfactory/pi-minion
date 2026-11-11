@@ -44,6 +44,9 @@ export type JobMetaEntry = {
   // prefer it over `model`, which stays the requested alias for adapter lookup.
   resolvedModel?: string;
   effort?: string;
+  // The named specialized agent this job ran as, when one was requested;
+  // display titles lead with it instead of the model.
+  agent?: string;
   prompt: string;
   workspace: string;
   sessionId: string;

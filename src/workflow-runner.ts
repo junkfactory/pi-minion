@@ -293,10 +293,14 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     workspace: wf.cwd,
     model: step.model,
     effort: step.effort,
+    agent: step.agent,
     context: wf.context,
     maxBudgetUsd: step.maxBudgetUsd ?? wf.maxBudgetUsd,
     timeoutMs: step.timeoutMs ?? wf.timeoutMs,
-    maxTurns: step.maxTurns ?? wf.maxTurns
+    // The null "no cap" sentinel is a value, not an absence: `??` would drop
+    // it (null ?? undefined → undefined) and let a later config edit retarget
+    // a pinned non-agent step in a mixed agent/non-agent definition.
+    maxTurns: step.maxTurns !== undefined ? step.maxTurns : wf.maxTurns
   };
   const isCancelled = () => step.status !== "running";
   deps.startStep(request, wf, settle, { title: workflowStepTitle(wf.title, step.id), id: step.id, workflowId: id }, isCancelled).then(

@@ -44,6 +44,9 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
   // stdin user-message frame (userMessageFrame below) instead of the trailing
   // positional prompt, which is what keeps the channel open for steering and
   // for the stdin close that lets the CLI exit.
+  // A named agent narrows config.allowedTools to request.allowedTools; absent
+  // (no agent), the config list is used unchanged.
+  const allowedTools = request.allowedTools ?? config.allowedTools;
   return [
     "-p",
     "--disable-slash-commands",
@@ -57,15 +60,13 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     "--include-partial-messages",
     "--permission-mode",
     "auto",
-    ...(config.allowedTools.length
-      ? ["--allowedTools", ...config.allowedTools]
-      : []),
+    ...(allowedTools.length ? ["--allowedTools", ...allowedTools] : []),
     "--model",
     request.model,
     "--max-budget-usd",
     String(request.maxBudgetUsd ?? config.maxBudgetUsd),
     "--append-system-prompt",
-    MINION_PROMPT_BASE,
+    request.systemPrompt ?? MINION_PROMPT_BASE,
     "--effort",
     request.effort,
     ...(config.adapterArgs?.claude?.args ?? [])

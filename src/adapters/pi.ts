@@ -156,7 +156,7 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
     "--thinking",
     request.effort,
     "--append-system-prompt",
-    MINION_PROMPT_BASE,
+    request.systemPrompt ?? MINION_PROMPT_BASE,
     ...(config.adapterArgs?.pi?.args ?? [])
   ];
 }

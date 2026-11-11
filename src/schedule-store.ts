@@ -26,6 +26,10 @@ export type JobSchedule = ScheduleBase & {
   kind?: "job";
   // Already validated, with workspace filled in from ctx.cwd.
   request: MinionRequest;
+  // Agent schedules only: the caller's raw pre-merge request. Ticks replay
+  // this instead of `request` so frontmatter model/effort/limit edits take
+  // effect on the next tick; the merged `request` stays for display and logs.
+  rawRequest?: MinionRequest;
   lastJobId?: string;
   // The latest run's jobMeta entry, held by reference: job-runner.ts fills
   // in resolvedModel on this same object, and pruneJobMeta only drops it
@@ -114,7 +118,7 @@ export function scheduleResolvedModel(
 // schedule's latest run, when there has been one; until then the alias shows.
 export type ScheduleLabelInput = Pick<ScheduleBase, "title" | "cron" | "effort"> &
   (
-    | { kind?: "job"; request: Pick<MinionRequest, "model"> }
+    | { kind?: "job"; request: Pick<MinionRequest, "model" | "agent"> }
     | { kind: "workflow"; def: { steps: readonly unknown[] } }
   );
 
@@ -128,7 +132,10 @@ export function formatScheduleLabel(
     return `${glyph("⏱⇉ ")}${schedule.title} · ${schedule.def.steps.length} steps · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
   }
   const model = resolvedModel ?? schedule.request.model;
-  return `${glyph("⏱ ")}${schedule.title} · ${model}${schedule.effort ? ` / ${schedule.effort}` : ""} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
+  // The agent names the schedule's prompt/tool surface as well as its model
+  // default; the model itself stays visible (it may be the agent's default).
+  const agent = schedule.request.agent ? `${schedule.request.agent} agent · ` : "";
+  return `${glyph("⏱ ")}${schedule.title} · ${agent}${model}${schedule.effort ? ` / ${schedule.effort}` : ""} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
 }
 
 // Lets a scheduled minion end its own schedule ("monitor X until Y"): the

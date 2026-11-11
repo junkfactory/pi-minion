@@ -333,6 +333,12 @@ describe("buildArgs", () => {
     assert.ok(task.endsWith("Explore the repo\n\nContext:\nsome evidence"));
   });
 
+  it("prepends a named agent's system prompt to the task text instead of the identity line", () => {
+    const agentPrompt = "You are a code review specialist.\n\nUse available tools as needed.";
+    const args = buildArgs(fakeRequest({ systemPrompt: agentPrompt }), fakeConfig());
+    assert.equal(args[0], `-p=${agentPrompt}\n\nExplore the repo`);
+  });
+
   it("carries the concise-summary standing instruction in the prefixed task text", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     const task = args[0] ?? "";

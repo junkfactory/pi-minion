@@ -3,6 +3,8 @@ import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { JobUI, StepRunStats } from "./agent.ui.js";
+import { minimatch } from "minimatch";
+import { AGENT_DIR, defaultLog, resolveAgent, type AgentLog } from "./agents.js";
 import type {
   AdapterParseState,
   AgentCliAdapter,
@@ -11,7 +13,7 @@ import type {
   TokenCounts,
   UsageTotals
 } from "./adapters/types.js";
-import { resolveTaskText, truncate } from "./adapters/util.js";
+import { MINION_OPERATIONAL_TAIL, resolveTaskText, truncate } from "./adapters/util.js";
 import {
   ensureRegistry,
   listAdapters,
@@ -84,10 +86,123 @@ export function resolveMaxTurns(
   return request.maxTurns ?? config.maxTurns;
 }
 
+// Tools may only ever be narrowed: an agent file's `tools` list is
+// intersected with config.allowedTools (Claude tool names/globs, e.g.
+// "mcp__*"). Only claude consumes request.allowedTools (pi auto-approves and
+// ignores it, agy skips permissions, fm has no tools), so validateRequest
+// applies this narrowing for claude alone; for any other known adapter the
+// list is ignored and logged rather than pretended. An empty result is a hard
+// error — claude receives no --allowedTools at all for an empty list, which
+// means unrestricted, so returning [] would silently widen the surface instead
+// of narrowing it. A config allowlist of [] pins nothing (empty = no
+// allowlist, same convention as models.allowed), so the agent's own list is
+// already the narrowing.
+function narrowAllowedTools(
+  agentName: string,
+  tools: string[] | undefined,
+  allowedTools: string[]
+): string[] | undefined {
+  if (tools === undefined) return undefined; // No frontmatter tools: inherit config.allowedTools.
+  if (tools.length === 0)
+    throw new Error(
+      `agent '${agentName}' lists no tools — for claude an empty list means unrestricted, not a restriction. Omit \`tools\` to inherit config.allowedTools.`
+    );
+  if (allowedTools.length === 0) return tools;
+  const permitted = tools.filter((tool) =>
+    allowedTools.some((pattern) => minimatch(tool, pattern, { nonegate: true }))
+  );
+  if (permitted.length === 0)
+    throw new Error(
+      `agent '${agentName}' allows only ${tools.join(", ")}, none of which config.allowedTools permits (${allowedTools.join(", ")}). Add a matching tool to config.allowedTools, or drop \`tools\` from the agent file.`
+    );
+  return permitted;
+}
+
+// Per-field precedence applied by applyAgentRequest/validateRequest: explicit
+// request value > agent frontmatter > config default. Config defaults aren't
+// merged here — the runner applies them unchanged, so an agent's
+// model/effort/limits only fill a gap the request and config both leave open,
+// and an agent can never outrank the request. applyAgentRequest's result: the
+// merged request plus what validateRequest needs to narrow tools AFTER the
+// model gates (so a gated model's error is never misordered behind a tools
+// error).
+type AgentMerge = {
+  merged: MinionRequest;
+  agentName: string;
+  agentTools: string[] | undefined;
+  narrow: boolean;
+};
+
+async function applyAgentRequest(
+  request: MinionRequest,
+  agentDir: string,
+  log: AgentLog
+): Promise<AgentMerge> {
+  const name = (request.agent ?? "").trim();
+  // Unknown agent: resolveAgent throws with the available names, the same
+  // contract as an unknown model.
+  const agent = await resolveAgent(name, agentDir, log);
+  // Post-merge model/effort must be non-empty, and the error has to name the
+  // agent: the generic "effort is required" hint would leave the caller
+  // looking in the wrong place.
+  const model = request.model?.trim() || agent.model;
+  if (!model)
+    throw new Error(
+      `agent '${name}' defines no model — pass \`model\` explicitly. Call help_pi_minion for the models usable here.`
+    );
+  const effort = request.effort?.trim() || agent.effort;
+  if (!effort)
+    throw new Error(
+      `agent '${name}' defines no effort — pass \`effort\` explicitly: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
+    );
+  // Only claude narrows: the other adapters never read request.allowedTools,
+  // so narrowing for them would claim a restriction the run does not have.
+  // An unresolved model keeps the conservative narrowing — it may still pass
+  // the model gate (allow-all default) and fail only at spawn. The narrowing
+  // itself runs in validateRequest AFTER the model gates, so a gated model's
+  // error is never misordered behind a tools error.
+  let adapter: AgentCliAdapter | undefined;
+  try {
+    adapter = resolveAdapterForModel(model);
+  } catch {
+    adapter = undefined;
+  }
+  if (adapter && adapter.command !== "claude" && agent.tools !== undefined) {
+    // Out of job: the agent name is the id, like agent_invalid.
+    log("agent_tools_ignored", {
+      id: name,
+      model,
+      detail: `agent=${name} adapter=${adapter.command} reason="tools narrows claude only"`
+    });
+  }
+  return {
+    merged: {
+      ...request,
+      agent: name,
+      model,
+      effort,
+      maxTurns: request.maxTurns !== undefined ? request.maxTurns : agent.maxTurns,
+      maxBudgetUsd: request.maxBudgetUsd ?? agent.maxBudgetUsd,
+      timeoutMs: request.timeoutMs ?? agent.timeoutMs,
+      systemPrompt: `${agent.body}\n\n${MINION_OPERATIONAL_TAIL}`
+    },
+    agentName: name,
+    agentTools: agent.tools,
+    // Unresolved model: narrow (conservative — it may run on claude); a known
+    // non-claude adapter never consumes allowedTools, so it never narrows.
+    narrow: adapter === undefined || adapter.command === "claude"
+  };
+}
+
 export async function validateRequest(
   request: MinionRequest,
   cwd: string,
-  config: MinionConfig
+  config: MinionConfig,
+  // Test seam, the same positional-override pattern as loadConfig: production
+  // callers omit it and get the user's real agent directory.
+  agentDir: string = AGENT_DIR,
+  // Same seam for the lifecycle log, so tests never write the real one.
+  log: AgentLog = defaultLog
 ): Promise<MinionRequest> {
   await ensureRegistry(config);
   const workspace = resolve(request.workspace);
@@ -96,49 +211,93 @@ export async function validateRequest(
   }
   if (!(await stat(workspace)).isDirectory())
     throw new Error("workspace is not a directory");
-  const modelProviders = providersOfModel(request.model);
+  // Blank agent = absent, consistent with task's trim check. The applied
+  // request drops a blank name so downstream titles/metadata never see one.
+  const agentName = request.agent?.trim();
+  // One agent application per run: a request that already carries a
+  // systemPrompt has been merged (run_pi_minion validates and passes the
+  // merged request on), so a second applyAgentRequest would only duplicate
+  // its side effects (agent_tools_ignored). Raw requests — schedule ticks,
+  // workflow steps — never carry one, so they still merge fresh, which keeps
+  // the documented deleted-agent-file tick failure. Every check below runs on
+  // whatever `effective` is either way.
+  const alreadyMerged = request.systemPrompt !== undefined;
+  let effective: MinionRequest;
+  let merge: AgentMerge | undefined;
+  if (agentName === undefined) effective = request;
+  else if (!agentName)
+    // Blank name: dropped, as before.
+    effective = { ...request, agent: undefined };
+  else if (alreadyMerged) effective = request;
+  else {
+    merge = await applyAgentRequest(request, agentDir, log);
+    effective = merge.merged;
+  }
+  const model = effective.model;
+  // A request with no agent must carry its own model; the old schema error is
+  // gone now that model is optional at the tool boundary.
+  if (!effective.agent && !model.trim())
+    throw new Error(
+      "model is required unless `agent` supplies one — call help_pi_minion for the models usable here."
+    );
+  const modelProviders = providersOfModel(model);
   if (modelProviders.length > 0 && !modelProviders.every((p) => isProviderAllowed(config, p))) {
     throw new Error(
-      `Model ${request.model} is excluded by the providers config (providers: ${modelProviders.join(", ")}). Call help_pi_minion for the models usable here.`
+      `Model ${model} is excluded by the providers config (providers: ${modelProviders.join(", ")}). Call help_pi_minion for the models usable here.`
     );
   }
-  if (!isModelAllowed(config, request.model))
+  if (!isModelAllowed(config, model))
     throw new Error(
-      isModelBlocked(config, request.model)
-        ? `Model is blocked: ${request.model} (models.blocked). Call help_pi_minion for the models usable here.`
-        : `Model is not allowed: ${request.model}. Call help_pi_minion for the models usable here.`
+      isModelBlocked(config, model)
+        ? `Model is blocked: ${model} (models.blocked). Call help_pi_minion for the models usable here.`
+        : `Model is not allowed: ${model}. Call help_pi_minion for the models usable here.`
     );
+  // Tools narrowing runs after the model gates: a gated model's error wins
+  // over a tools error, and the gates check the merged model either way. A
+  // known non-claude adapter logged agent_tools_ignored at merge time and
+  // never narrows (narrow is false), so nothing here can widen claude's
+  // surface: an empty intersection still hard-rejects.
+  if (merge?.agentTools !== undefined && merge.narrow)
+    effective = {
+      ...effective,
+      allowedTools: narrowAllowedTools(merge.agentName, merge.agentTools, config.allowedTools)
+    };
   if (
-    request.maxBudgetUsd !== undefined &&
-    (!Number.isFinite(request.maxBudgetUsd) || request.maxBudgetUsd <= 0)
+    effective.maxBudgetUsd !== undefined &&
+    (!Number.isFinite(effective.maxBudgetUsd) || effective.maxBudgetUsd <= 0)
   ) {
     throw new Error("maxBudgetUsd must be a positive number");
   }
   if (
-    request.timeoutMs !== undefined &&
-    (!Number.isFinite(request.timeoutMs) ||
-      request.timeoutMs <= 0 ||
-      request.timeoutMs > MAX_TIMEOUT_MS)
+    effective.timeoutMs !== undefined &&
+    (!Number.isFinite(effective.timeoutMs) ||
+      effective.timeoutMs <= 0 ||
+      effective.timeoutMs > MAX_TIMEOUT_MS)
   ) {
     throw new Error(
       `timeoutMs must be a positive number of milliseconds no greater than ${MAX_TIMEOUT_MS} (Node's setTimeout limit)`
     );
   }
-  if (request.maxTurns !== undefined && request.maxTurns !== null && !isValidMaxTurns(request.maxTurns)) {
+  if (
+    effective.maxTurns !== undefined &&
+    effective.maxTurns !== null &&
+    !isValidMaxTurns(effective.maxTurns)
+  ) {
     throw new Error(
       `maxTurns must be a whole number from ${MIN_MAX_TURNS} to ${MAX_MAX_TURNS} (omit it for no turn cap)`
     );
   }
   // The adapter check runs on the EFFECTIVE cap, not just the request's own:
-  // a config.maxTurns default reaches the runner the same way, so a request
-  // that names none but inherits one must be rejected here too.
-  if (resolveMaxTurns(request, config) !== undefined) {
+  // a config.maxTurns default (or an agent file's default) reaches the runner
+  // the same way, so a request that names none but inherits one must be
+  // rejected here too.
+  if (resolveMaxTurns(effective, config) !== undefined) {
     // A cap is enforced by counting the adapter's turnStart events, so an
     // adapter that reports no turn boundaries would leave it silently
     // unenforced: fail fast instead of accepting a cap that never fires.
     let capAdapter: AgentCliAdapter | undefined;
     try {
-      capAdapter = resolveAdapterForModel(request.model);
+      capAdapter = resolveAdapterForModel(model);
     } catch {
       // Unknown model: startJob's refreshed resolution reports it, not this.
       capAdapter = undefined;
@@ -150,7 +309,7 @@ export async function validateRequest(
     }
   }
   if (!request.task.trim()) throw new Error("task is required");
-  if (!request.effort?.trim())
+  if (!effective.effort?.trim())
     throw new Error(
       "effort is required — pick the level that fits the task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes (auth, money, data deletion, concurrency)."
     );
@@ -164,7 +323,7 @@ export async function validateRequest(
       );
     }
   }
-  return { ...request, workspace };
+  return { ...effective, workspace };
 }
 
 export async function startJob(
@@ -192,12 +351,17 @@ export async function startJob(
   // Workflow steps only: checked right before the process spawns; true means
   // the step was cancelled while this job was still starting, so nothing is
   // spawned (no paid process) and the promise rejects.
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean,
+  // Test seams for validateRequest's agent resolution, the same rationale as
+  // validateRequest's own positional overrides: tests never touch the user's
+  // real agent dir or lifecycle log.
+  agentDir: string = AGENT_DIR,
+  log: AgentLog = defaultLog
 ): Promise<string> {
   const config = await loadConfig();
   pruneJobMeta(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
   pruneWorkflows(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
-  const validRequest = await validateRequest(request, cwd, config);
+  const validRequest = await validateRequest(request, cwd, config, agentDir, log);
   // help_pi_minion awaits every adapter's catalog refresh before listing
   // models; a run must not declare a model unknown against a catalog that
   // session_start's fire-and-forget refresh hasn't populated yet. The refresh
@@ -213,11 +377,17 @@ export async function startJob(
   const parseState: AdapterParseState = {};
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
-  const title = workflowStep?.title ?? deriveJobTitle(request.task);
+  // An agent-named job leads its display title with the agent, so the
+  // picker, modal and list rows read "reviewer: …" instead of a model prefix.
+  const baseTitle = workflowStep?.title ?? deriveJobTitle(request.task);
+  const title = validRequest.agent ? `${validRequest.agent}: ${baseTitle}` : baseTitle;
   jobMeta.set(id, {
     title,
-    model: request.model,
-    effort: request.effort,
+    // The merged values, not the raw request's: an agent job started with
+    // "" model/effort must record what it actually runs.
+    model: validRequest.model,
+    effort: validRequest.effort,
+    agent: validRequest.agent,
     prompt: resolveTaskText(request),
     workspace: validRequest.workspace,
     // Resolved now, not taken as-is: a session replaced while this job was
@@ -236,7 +406,7 @@ export async function startJob(
     try {
       await mkdir(JOB_ROOT, { recursive: true, mode: 0o700 });
       await chmod(JOB_ROOT, 0o700);
-      void logJobEvent("started", { id, model: request.model });
+      void logJobEvent("started", { id, model: validRequest.model });
       await mkdir(jobDir, { mode: 0o700 });
       await chmod(jobDir, 0o700);
       if (isCancelled?.()) {
@@ -367,7 +537,7 @@ export async function startJob(
     cappedAt = maxTurns;
     const turns = turnPayload();
     markJobFinished(id, "cancelled", { turnsSeen: turns.current, maxTurns: turns.max });
-    void logJobEvent("cancelled", { id, model: request.model, detail: `maxTurns=${maxTurns} reached` });
+    void logJobEvent("cancelled", { id, model: validRequest.model, detail: `maxTurns=${maxTurns} reached` });
     const frame = adapter.capStopFrame?.();
     if (frame !== undefined && stdin && !stdinBroken()) writeStdin(frame);
     else stopProcess();
@@ -392,12 +562,12 @@ export async function startJob(
   // The CLI-reported model id, once its init event arrives; until then the
   // widget shows the requested alias.
   let resolvedModel: string | undefined;
-  const displayModel = () => resolvedModel ?? request.model;
+  const displayModel = () => resolvedModel ?? validRequest.model;
   const emitPreview = () => {
     jobUI.setJob(id, {
       title,
       model: displayModel(),
-      effort: request.effort,
+      effort: validRequest.effort,
       startedAt,
       previewLine: lastPreviewLine,
       tokenUsage: runningTokens && { ...runningTokens },
@@ -484,7 +654,7 @@ export async function startJob(
         case "thinking":
           if (!sawThinkingDelta) {
             sawThinkingDelta = true;
-            lastPreviewLine = thinkingPlaceholder(request.effort);
+            lastPreviewLine = thinkingPlaceholder(validRequest.effort);
             emitPreview();
           }
           break;
@@ -576,7 +746,7 @@ export async function startJob(
     clearTimeout(forceKillTimeout);
     clearTimeout(graceTimeout);
     clearInterval(statusInterval);
-    void logJobEvent(event, { id, model: request.model, detail });
+    void logJobEvent(event, { id, model: validRequest.model, detail });
     const job = jobs.get(id);
     if (job) job.status = "finalizing";
     return true;
@@ -586,10 +756,10 @@ export async function startJob(
       jobId: id,
       agent: adapter.name,
       model: displayModel(),
-      effort: request.effort,
+      effort: validRequest.effort,
       ...usageFields(finalUsage),
       perModel: finalUsage?.perModel,
-      maxBudgetUsd: request.maxBudgetUsd ?? config.maxBudgetUsd,
+      maxBudgetUsd: validRequest.maxBudgetUsd ?? config.maxBudgetUsd,
       budgetEnforced: adapter.capabilities.supportsMaxBudgetUsd,
       // The cap the runner actually enforces (same resolution as capStop).
       maxTurns: resolveMaxTurns(validRequest, config) ?? null,
@@ -705,12 +875,13 @@ export async function startJob(
         writeChildSession({
           parentSessionFile,
           cwd,
-          name: `${displayModel()}: ${workflowStep?.id ?? title}`,
+          agent: validRequest.agent,
+          name: workflowStep?.id ?? deriveJobTitle(request.task),
           prompt: resolveTaskText(request),
           resultText: finalResult ?? result,
           provider: adapter.command,
           model: displayModel(),
-          effort: request.effort,
+          effort: validRequest.effort,
           startedAt,
           finishedAt: meta?.finishedAt ?? Date.now(),
           usage: finalUsage
