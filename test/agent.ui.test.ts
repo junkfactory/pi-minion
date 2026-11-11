@@ -6,6 +6,7 @@ import {
   createJobUI,
   renderWorkflowConfirmBody,
   renderWorkflowConfirmLines,
+  type ModalState,
   type WorkflowConfirm,
   type WorkflowConfirmResult,
   type JobStatusUpdate, type WorkflowWidgetStatus } from "../src/agent.ui.js";
@@ -220,6 +221,159 @@ describe("workflow widget", () => {
 
     assert.ok(lines.length <= 12, `expected <=12 lines, got ${lines.length}`);
     assert.match(lines.at(-1)!, /\+\d+ more running/);
+  });
+});
+
+describe("turn counter", () => {
+  const turns = (current: number, max?: number) => ({ current, ...(max !== undefined && { max }) });
+
+  // Opens a modal, then routes the turn payload through setJob (the live path).
+  function openedModal(payload?: { current: number; max?: number }) {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    void jobUI.openModal("modalJob", { title: "Modal Job", model: "opus", prompt: "" });
+    if (payload) jobUI.setJob("modalJob", job({ turns: payload }));
+    const component = state.customFactory!(fakeTui(40), fakeTheme(), {}, () => {}) as {
+      render(width: number): string[];
+    };
+    return { jobUI, state, lines: component.render(80) };
+  }
+
+  it("shows a capped turn badge in the modal header as turn: N/max", () => {
+    const { lines } = openedModal(turns(3, 20));
+    assert.ok(lines.some((l) => l.includes("turn: 3/20")), lines.join("\n"));
+  });
+
+  it("shows an uncapped turn badge in the modal header as turn: N", () => {
+    const { lines } = openedModal(turns(3));
+    assert.ok(lines.some((l) => /turn: 3(?!\/)/.test(l)), lines.join("\n"));
+  });
+
+  it("shows no turn badge in the modal header when no turns payload has arrived", () => {
+    const { lines } = openedModal();
+    assert.ok(!lines.some((l) => /turn:/.test(l)), lines.join("\n"));
+  });
+
+  it("seeds the modal badge from the job registry when the modal opens late", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setJob("modalJob", job({ turns: turns(3, 20) }));
+    void jobUI.openModal("modalJob", { title: "Modal Job", model: "opus", prompt: "" });
+    const component = state.customFactory!(fakeTui(40), fakeTheme(), {}, () => {}) as {
+      render(width: number): string[];
+    };
+    assert.ok(component.render(80).some((l) => l.includes("turn: 3/20")));
+  });
+
+  it("shows the capped and uncapped turn part on standalone widget rows", () => {
+    const capped = fakeCtx();
+    createJobUI(capped.ctx as any).setJob("job1", job({ turns: turns(3, 20) }));
+    const [, cappedRow] = capped.state.widgetFactory!(fakeTui(), fakeTheme()).render(120);
+    assert.match(cappedRow!, /3\/20 turns/);
+
+    const uncapped = fakeCtx();
+    createJobUI(uncapped.ctx as any).setJob("job1", job({ turns: turns(3) }));
+    const [, uncappedRow] = uncapped.state.widgetFactory!(fakeTui(), fakeTheme()).render(120);
+    assert.match(uncappedRow!, /\b3 turns/);
+    assert.ok(!/3\/\d+ turns/.test(uncappedRow!));
+
+    const single = fakeCtx();
+    createJobUI(single.ctx as any).setJob("job1", job({ turns: turns(1) }));
+    const [, singleRow] = single.state.widgetFactory!(fakeTui(), fakeTheme()).render(120);
+    assert.match(singleRow!, /\b1 turn\b/);
+    assert.ok(!/\b1 turns\b/.test(singleRow!), singleRow!);
+  });
+
+  it("shows the turn part on the live workflow step row and the finished step row", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setJob("job1", job({ title: "Verify", model: "luna", turns: turns(3, 20) }));
+    const wf: WorkflowWidgetStatus = {
+      title: "Review MR",
+      startedAt: Date.now() - 3000,
+      stage: 2,
+      stages: 2,
+      steps: [
+        { id: "bugs", status: "done", model: "sonnet", effort: "medium", startedAt: 1_000, finishedAt: 13_000, turns: turns(4) },
+        { id: "verify", status: "running", model: "luna", effort: "low", jobId: "job1" }
+      ]
+    };
+    jobUI.setWorkflow("wf", wf);
+    const [, , finishedRow, liveRow] = state.widgetFactory!(fakeTui(), fakeTheme()).render(160);
+    assert.match(liveRow!, /verify \(luna\/low\).* · 3\/20 turns/);
+    assert.match(finishedRow!, /bugs .* · 4 turns/);
+  });
+
+  it("routes a setJob turns payload into the open live modal", () => {
+    const { jobUI, state } = openedModal(turns(2, 20));
+    jobUI.setJob("modalJob", job({ turns: turns(3, 20) }));
+    const component = state.customFactory!(fakeTui(40), fakeTheme(), {}, () => {}) as {
+      render(width: number): string[];
+    };
+    assert.ok(component.render(80).some((l) => l.includes("turn: 3/20")));
+  });
+
+  it("mirrors a setJob turns payload into the active detail state, for that job id only", () => {
+    const { ctx } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    const detail: ModalState = {
+      jobId: "modalJob",
+      title: "Detail",
+      model: "opus",
+      prompt: "",
+      blocks: [],
+      finished: false,
+      requestRender: () => {}
+    };
+    jobUI.setActiveDetail(detail);
+    jobUI.setJob("other", job({ turns: turns(9) }));
+    assert.equal(detail.turns, undefined);
+    jobUI.setJob("modalJob", job({ turns: turns(3, 20) }));
+    assert.deepEqual(detail.turns, { current: 3, max: 20 });
+  });
+
+  it("stays undefined on the detail state when no turns payload has arrived", () => {
+    const { ctx } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    const detail: ModalState = {
+      jobId: "modalJob",
+      title: "Detail",
+      model: "opus",
+      prompt: "",
+      blocks: [],
+      finished: false,
+      requestRender: () => {}
+    };
+    jobUI.setActiveDetail(detail);
+    jobUI.setJob("modalJob", job());
+    assert.equal(detail.turns, undefined);
+  });
+
+  it("renders no turn counter on a standalone row or a finished step row when no turn has started", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setJob("job1", job());
+    const [, row] = state.widgetFactory!(fakeTui(), fakeTheme()).render(120);
+    assert.ok(!/turn/.test(row!), row);
+  });
+
+  it("renders nothing for a zero-turn payload on the row, the finished step row, or the modal header", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setJob("job1", job({ turns: turns(0, 20) }));
+    jobUI.setWorkflow("wf", {
+      title: "Review MR",
+      startedAt: 1_000,
+      stage: 1,
+      stages: 1,
+      steps: [{ id: "bugs", status: "done", model: "sonnet", effort: "medium", startedAt: 1_000, finishedAt: 13_000, turns: turns(0, 20) }]
+    });
+    const [, , stepRow, jobRow] = state.widgetFactory!(fakeTui(), fakeTheme()).render(160);
+    assert.ok(!/turn/.test(stepRow!), stepRow);
+    assert.ok(!/turn/.test(jobRow!), jobRow);
+
+    const { lines } = openedModal(turns(0, 20));
+    assert.ok(!lines.some((l) => /turn/.test(l)), lines.join("\n"));
   });
 });
 

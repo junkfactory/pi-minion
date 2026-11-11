@@ -50,6 +50,10 @@ export type JobMetaEntry = {
   status: JobMetaStatus;
   finishedAt?: number;
   reportPath?: string;
+  // Final turn counts, frozen when the job finished so the trail browser can
+  // show them after the live registry (agent.ui.ts) has dropped the job.
+  turnsSeen?: number;
+  maxTurns?: number;
   // Set when this job is a workflow step (the owning workflow's map key);
   // lets the /pi-minions picker list step-owned metas separately from
   // standalone jobs and keep each finished workflow's steps grouped.

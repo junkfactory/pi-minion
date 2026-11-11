@@ -10,6 +10,7 @@ import {
   type FrameSpec
 } from "./modal-shell.js";
 import {
+  formatTurns,
   jobDetailSpec,
   type JobUI,
   type ModalState
@@ -116,7 +117,14 @@ export function formatWorkflowTrailLabel(wf: MinionWorkflow): string {
 export function formatStepTrailLabel(step: MinionWorkflow["steps"][number]): string {
   const meta = step.jobId ? jobMeta.get(step.jobId) : undefined;
   const model = meta?.resolvedModel ?? step.model;
-  return `${glyph("› ")}${step.id} · ${step.status} · ${model} · ${formatRelative(step.finishedAt ?? Date.now())}`;
+  const turns =
+    meta?.turnsSeen !== undefined && meta.turnsSeen > 0
+      ? ` · ${formatTurns(
+          { current: meta.turnsSeen, max: meta.maxTurns },
+          (count) => `turn ${count}`
+        )}`
+      : "";
+  return `${glyph("› ")}${step.id} · ${step.status} · ${model}${turns} · ${formatRelative(step.finishedAt ?? Date.now())}`;
 }
 
 // Sentinel id for the top picker's "✓ Completed · N trails" row. Picking
@@ -351,6 +359,9 @@ class TrailBrowser implements Component {
       model: meta.resolvedModel ?? meta.model,
       effort: meta.effort,
       prompt: meta.prompt,
+      ...(meta.turnsSeen !== undefined && {
+        turns: { current: meta.turnsSeen, ...(meta.maxTurns !== undefined && { max: meta.maxTurns }) }
+      }),
       blocks: pruned && text ? [{ type: "text", text }] : [],
       finished,
       requestRender: this.requestRenderFn

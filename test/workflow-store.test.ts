@@ -492,6 +492,13 @@ describe("workflow status helpers", () => {
       [["bugs", fakeWorkflow().steps[0].model], ["verify", "gpt-6-luna"]]
     );
   });
+
+  it("carries a finished step's frozen turn counts into the widget status", () => {
+    const wf = fakeWorkflow();
+    wf.steps[0].turns = { current: 4, max: 20 };
+    assert.deepEqual(workflowWidgetStatus(wf).steps[0].turns, { current: 4, max: 20 });
+    assert.equal(workflowWidgetStatus(wf).steps[1].turns, undefined);
+  });
 });
 
 describe("session ownership", () => {

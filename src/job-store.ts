@@ -189,7 +189,7 @@ export async function steerJob(
 export function markJobFinished(
   id: string,
   status: Exclude<JobMetaStatus, "running">,
-  extra: Pick<JobMetaEntry, "reportPath"> = {}
+  extra: Pick<JobMetaEntry, "reportPath" | "turnsSeen" | "maxTurns"> = {},
 ): JobMetaEntry | undefined {
   const meta = jobMeta.get(id);
   if (meta) Object.assign(meta, { status, finishedAt: Date.now(), ...extra });

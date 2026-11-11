@@ -338,6 +338,13 @@ export async function startJob(
   const maxTurns = resolveMaxTurns(validRequest, config);
   let turnsSeen = 0;
   let cappedAt: number | undefined;
+  // Display convention: when a cap applies, the shown current is clamped to
+  // it. The stopping turn still starts (the runner sees maxTurns + 1) so the
+  // counter would otherwise read "2/1" on the very tick that stops the run.
+  const turnPayload = () => ({
+    current: maxTurns !== undefined ? Math.min(turnsSeen, maxTurns) : turnsSeen,
+    ...(maxTurns !== undefined && { max: maxTurns })
+  });
   // One-shot wrap-up warning. It fires exactly on the turn that leaves
   // WARN_TURNS_LEFT turns, so it reaches the CLI early enough to act on and
   // never repeats. A cap of WARN_TURNS_LEFT turns or fewer has no room for it.
@@ -358,7 +365,8 @@ export async function startJob(
   const capStop = () => {
     if (cappedAt !== undefined || maxTurns === undefined) return;
     cappedAt = maxTurns;
-    markJobFinished(id, "cancelled");
+    const turns = turnPayload();
+    markJobFinished(id, "cancelled", { turnsSeen: turns.current, maxTurns: turns.max });
     void logJobEvent("cancelled", { id, model: request.model, detail: `maxTurns=${maxTurns} reached` });
     const frame = adapter.capStopFrame?.();
     if (frame !== undefined && stdin && !stdinBroken()) writeStdin(frame);
@@ -392,7 +400,8 @@ export async function startJob(
       effort: request.effort,
       startedAt,
       previewLine: lastPreviewLine,
-      tokenUsage: runningTokens && { ...runningTokens }
+      tokenUsage: runningTokens && { ...runningTokens },
+      turns: turnPayload()
     });
   };
   const updatePreview = (text: string) => {
@@ -497,6 +506,7 @@ export async function startJob(
           break;
         case "turnStart":
           turnsSeen++;
+          emitPreview();
           // Warn before the cap check so the warning lands on its own turn, not
           // after a stop. An adapter without steerFrame (agy, fm) has no way to
           // receive it, so the warning is silently skipped and only the hard cap
@@ -552,8 +562,9 @@ export async function startJob(
     // The same tokens the live widget row showed, falling back to the final
     // totals for a CLI that only reports usage at the end.
     const tokenUsage = runningTokens ?? (finalUsage && tokenCountsFromUsage(finalUsage));
+    const turns = turnPayload();
     try {
-      onSettled?.({ ...outcome, startedAt, finishedAt: Date.now(), tokenUsage, totalCostUsd: finalUsage?.totalCostUsd });
+      onSettled?.({ ...outcome, startedAt, finishedAt: Date.now(), tokenUsage, turns, totalCostUsd: finalUsage?.totalCostUsd });
     } catch {}
   };
   // Shared first step of both exit paths: runs once, stops timers, logs, and
@@ -659,10 +670,11 @@ export async function startJob(
         !outputError &&
         finalResult !== undefined;
       const priorStatus = jobMeta.get(id)?.status;
+      const turns = turnPayload();
       const meta = markJobFinished(
         id,
         priorStatus === "cancelled" ? "cancelled" : clean ? "done" : "errored",
-        { reportPath }
+        { reportPath, turnsSeen: turns.current, maxTurns: turns.max }
       );
       const buildResult = (preview: string | undefined): string =>
         outputError
@@ -756,7 +768,8 @@ export async function startJob(
       return;
     let failureReason: string | undefined;
     try {
-      markJobFinished(id, "errored");
+      const turns = turnPayload();
+      markJobFinished(id, "errored", { turnsSeen: turns.current, maxTurns: turns.max });
       clearJobViews(jobUI, id);
       output.writeStderr(error.stack ?? error.message);
       const outputError = await output.close();

@@ -262,6 +262,7 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     step.startedAt = outcome.startedAt;
     step.finishedAt = outcome.finishedAt;
     step.tokenUsage = outcome.tokenUsage;
+    step.turns = outcome.turns;
     step.totalCostUsd = outcome.totalCostUsd;
     // A reply that reports its own packet unworkable voids the run: abort
     // before the stop-marker check (its marker is on the last line, so

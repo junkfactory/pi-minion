@@ -64,6 +64,9 @@ export type JobStatusUpdate = {
   startedAt: number;
   previewLine?: string;
   tokenUsage?: TokenCounts;
+  // Turns started so far, and the run's cap when one applies (undefined =
+  // uncapped). Absent until the first turn starts.
+  turns?: { current: number; max?: number };
   // Set for a finished step's row: elapsed stops here instead of ticking.
   finishedAt?: number;
 };
@@ -74,6 +77,8 @@ export type StepRunStats = {
   startedAt: number;
   finishedAt: number;
   tokenUsage?: TokenCounts;
+  // The turns the finished row showed live, frozen like its elapsed time.
+  turns?: { current: number; max?: number };
   // Final billed cost, when the CLI reported one; undefined for a CLI with
   // no cost concept (formatCostUsd renders that as "n/a").
   totalCostUsd?: number;
@@ -221,6 +226,8 @@ export type ModalState = {
   effort?: string;
   /** The prompt sent to the pi minion; static for the life of the modal. */
   prompt: string;
+  /** Mirror of the job payload's turn progress; undefined until first turn. */
+  turns?: { current: number; max?: number };
   blocks: ModalBlock[];
   finished: boolean;
   requestRender: () => void;
@@ -245,13 +252,26 @@ export function renderModalBlock(theme: Theme, block: ModalBlock): string {
   return `${header}\n${theme.fg("syntaxComment", "⎿")} ${status}${meta ? ` ${meta}` : ""}`;
 }
 
-// "(model/effort) · tokens · 12s", shared by a standalone job's row and a
-// running workflow step's row.
-// "(model/effort) · tokens · Ns" — shared by standalone job rows and every
-// workflow step row. No startedAt (a step that hasn't run) omits elapsed.
+// The numeric part of a turn counter ("3", "3/20"), with the widget row's
+// default wording handling the singular. Callers with different copy pass a
+// formatter so the modal's "turn: 3/20" and the trail's "turn 3/20" keep
+// their own wording.
+export function formatTurns(
+  turns: { current: number; max?: number },
+  formatCount: (count: string) => string = (count) => `${count} ${count === "1" ? "turn" : "turns"}`
+): string {
+  const count = turns.max === undefined ? `${turns.current}` : `${turns.current}/${turns.max}`;
+  return formatCount(count);
+}
+
+// "(model/effort) · tokens · 3/20 turns · 12s", shared by standalone job rows
+// and every workflow step row. No startedAt (a step that hasn't run) omits
+// elapsed.
 function formatJobMeta(
   theme: Theme,
-  status: Pick<JobStatusUpdate, "model" | "effort" | "tokenUsage" | "finishedAt"> & { startedAt?: number }
+  status: Pick<JobStatusUpdate, "model" | "effort" | "tokenUsage" | "finishedAt" | "turns"> & {
+    startedAt?: number;
+  }
 ): string {
   const elapsedSeconds =
     status.startedAt === undefined
@@ -275,9 +295,14 @@ function formatJobMeta(
         )
       )
     : undefined;
+  // A zero-turn job shows nothing, matching the modal header.
+  const turnPart =
+    status.turns && status.turns.current > 0
+      ? theme.fg("syntaxComment", formatTurns(status.turns))
+      : undefined;
   const elapsedPart = elapsedSeconds === undefined ? undefined : theme.fg("syntaxComment", `${elapsedSeconds}s`);
   const dot = theme.fg("syntaxComment", " · ");
-  return [modelEffortPart, tokenUsagePart, elapsedPart].filter(Boolean).join(dot);
+  return [modelEffortPart, tokenUsagePart, turnPart, elapsedPart].filter(Boolean).join(dot);
 }
 
 function formatWorkflowBlock(
@@ -422,6 +447,11 @@ export function jobDetailSpec(state: ModalState): FrameSpec {
       const titlePart = theme.bold(theme.fg("accent", state.title));
       const dot = theme.fg("syntaxComment", " · ");
       const badges = [theme.fg("syntaxComment", state.model), color(`thinking: ${state.effort ?? "off"}`)];
+      if (state.turns && state.turns.current > 0) {
+        badges.push(
+          theme.fg("syntaxComment", formatTurns(state.turns, (count) => `turn: ${count}`))
+        );
+      }
       if (state.finished) badges.push(theme.fg("syntaxComment", "finished"));
       return [headerRow(theme, titlePart, badges.join(dot), innerWidth), null];
     },
@@ -727,6 +757,17 @@ export function createJobUI(
     ensureWidgetRegistered();
     ensureSpinnerRunning();
     requestWidgetRender();
+    // Mirror only on change: emitPreview runs on every stream tick, and each
+    // payload would otherwise re-render the modal even when the count is
+    // unchanged. After the widget refresh so its own throw can't skip it.
+    if (
+      activeModal?.jobId === id &&
+      status.turns &&
+      (activeModal.turns?.current !== status.turns.current || activeModal.turns?.max !== status.turns.max)
+    ) {
+      activeModal.turns = status.turns;
+      activeModal.requestRender();
+    }
   }
 
   function setWorkflow(id: string, status: WorkflowWidgetStatus): void {
@@ -800,6 +841,7 @@ export function createJobUI(
       prompt: initial.prompt,
       blocks: initial.text ? [{ type: "text", text: initial.text }] : [],
       finished: initial.finished ?? false,
+      turns: jobs.get(id)?.turns,
       requestRender: () => {}
     };
     activeModal = state;

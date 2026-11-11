@@ -600,7 +600,8 @@ export function workflowWidgetStatus(
       jobId: step.jobId,
       startedAt: step.startedAt,
       finishedAt: step.finishedAt,
-      tokenUsage: step.tokenUsage
+      tokenUsage: step.tokenUsage,
+      turns: step.turns
     }))
   };
 }

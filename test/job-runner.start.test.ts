@@ -804,6 +804,39 @@ describe("startJob", () => {
     }
   });
 
+  it("setJob payloads carry the started-turn count, with max only when a cap applies", async () => {
+    // Three turn_start events in MODE:multi. The recording UI sees every setJob
+    // payload; the last one must hold the final count.
+    setModelRegistry(fakeModelRegistry([{ id: "crouton-alpha-free", provider: "opencode-go" }]));
+    const lastTurns = async (maxTurns?: number | null, mode = "multi") => {
+      const payloads: Array<{ turns?: { current: number; max?: number } }> = [];
+      const recordingUI = new Proxy(
+        {},
+        { get: (_t, prop) => (prop === "setJob" ? (_id: string, status: object) => payloads.push(status) : noop) }
+      ) as unknown as Parameters<typeof startJob>[5];
+      const { sessionId, posts } = newSession();
+      await startJob(
+        { task: `Do a thing MODE:${mode}`, workspace, model: "opencode-go/crouton-alpha-free", effort: "medium", maxTurns },
+        workspace, sessionId, undefined, noop, recordingUI
+      );
+      await waitFor(() => posts.length > 0);
+      assert.ok(
+        payloads.every((p) => p.turns === undefined || p.turns.max === undefined || p.turns.current <= p.turns.max),
+        "a capped payload never reports more turns than its max"
+      );
+      return payloads.at(-1)?.turns;
+    };
+    try {
+      assert.deepEqual(await lastTurns(5), { current: 3, max: 5 });
+      assert.deepEqual(await lastTurns(null), { current: 3 });
+      // The stopping turn opens one past the cap before the runner can stop it;
+      // the display clamps so the badge never reads 2/1.
+      assert.deepEqual(await lastTurns(1, "turns"), { current: 1, max: 1 });
+    } finally {
+      setModelRegistry(undefined);
+    }
+  });
+
   it("omitting maxTurns leaves a multi-turn run uncapped and clean", async () => {
     setModelRegistry(fakeModelRegistry([{ id: "crouton-alpha-free", provider: "opencode-go" }]));
     try {

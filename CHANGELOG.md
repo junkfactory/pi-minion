@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.0]
+
+- New turn counter (current/max) across the UI: a job's turn progress shows as `N turns` (uncapped) or `N/M turns` (capped) on standalone job rows and workflow step rows (live and finished), as a `turn: N/M` badge in the detail-modal header, and as `· turn N/M` in the trail browser's steps-view labels and per-step detail modals. The count updates live on every turn start, is clamped to the cap when a capped run's stopping turn would show `maxTurns + 1`, and is simply absent for adapters that report no turn boundaries or for jobs whose first turn never starts. Finished jobs freeze the final counts into job meta, so the trail browser keeps showing them after the live registry drops the job.
+
 ## [0.1.0]
 
 - New Troubleshooting entry: why a substring-looking `models.blocked`/`models.allowed` pattern like `*-contributor*` silently matches nothing against provider-qualified ids (minimatch `*` does not cross `/`), and why `**/*-contributor*` does. The README documents the `**/*` rule alongside its pattern rules.

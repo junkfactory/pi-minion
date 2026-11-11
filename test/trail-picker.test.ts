@@ -544,6 +544,24 @@ describe("runTrailBrowser — steps view", () => {
     assert.match(text, /  › beta/);
   });
 
+  it("labels each finished step with its final turn count from job meta", async () => {
+    jobMeta.set("ja", fakeMeta({ title: "alpha", model: "sonnet", status: "done", finishedAt: 1, turnsSeen: 3, maxTurns: 20 }));
+    workflows.set(
+      "w1",
+      fakeWorkflow({
+        sessionId: SESSION,
+        finishedAt: 1,
+        steps: [{ id: "alpha", task: "t", model: "sonnet", effort: "low", dependsOn: [], status: "done", jobId: "ja", reportPath: "/r" }]
+      })
+    );
+    const { ctx, state } = fakeCtx();
+    void runTrailBrowser(ctx as any, createJobUI(ctx as any));
+    const { component } = openBrowser(state);
+    component.handleInput("\x1b[B"); // cursor onto the workflow row
+    component.handleInput("\r"); // enter → steps view
+    assert.match(renderText(component), /› alpha · done · sonnet · turn 3\/20 · /);
+  });
+
   it("skips steps with no jobId defensively in the steps view", async () => {
     workflows.set(
       "w1",
@@ -616,6 +634,21 @@ describe("runTrailBrowser — steps view", () => {
 });
 
 describe("runTrailBrowser — detail view", () => {
+  it("seeds the detail modal header with the job's final turn count", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    try {
+      jobMeta.set("trail1", fakeMeta({ title: "Trail", model: "sonnet", status: "done", finishedAt: 1, turnsSeen: 3, maxTurns: 20 }));
+      const { ctx, state } = fakeCtx();
+      void runTrailBrowser(ctx as any, createJobUI(ctx as any), undefined, dir);
+      const { component } = openBrowser(state);
+      component.handleInput("\r");
+      const text = await waitForDetail(component);
+      assert.match(text, /turn: 3\/20/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("seeds the modal with a 'stream log pruned' text block + reportPath when stdout.json is gone", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
@@ -855,6 +888,18 @@ describe("label formatters", () => {
       finishedAt: Date.now() - 60_000
     });
     assert.match(label, /^› alpha · done · claude-opus-5-5 · /);
+  });
+
+  it("formatStepTrailLabel appends the final turn count, capped or uncapped, and nothing at zero", () => {
+    const step = { id: "alpha", task: "t", model: "sonnet", effort: "low", dependsOn: [], status: "done" as const, jobId: "ja" };
+    const at = (meta: Partial<JobMetaEntry>) => {
+      jobMeta.set("ja", fakeMeta({ title: "step", model: "sonnet", status: "done", finishedAt: 1, ...meta }));
+      return formatStepTrailLabel(step);
+    };
+    assert.match(at({ turnsSeen: 3, maxTurns: 20 }), / · turn 3\/20 · /);
+    assert.match(at({ turnsSeen: 3 }), / · turn 3 · /);
+    assert.doesNotMatch(at({ turnsSeen: 0, maxTurns: 20 }), /turn/);
+    assert.doesNotMatch(at({}), /turn/);
   });
 });
 
