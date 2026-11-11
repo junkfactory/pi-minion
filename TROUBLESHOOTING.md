@@ -253,3 +253,20 @@ schedule that pinned it, or the config default.
 The wrap-up warning is deliberately anchored to a turn, not the clock:
 steering frames only land at turn boundaries, so a time-based warning could
 fire with no turn left to deliver it.
+
+**A `models.blocked` / `models.allowed` pattern matches nothing.**
+Symptom: the entry is silently ignored — blocked models still appear in
+`help_pi_minion` and are accepted by `run_pi_minion`. Cause: minimatch's `*`
+does not cross `/` (that is `modelMatchesPattern` in `src/config.ts`, run
+with `{ nocase: true, nonegate: true }`), so a substring-looking pattern
+matches only bare ids, never a qualified `provider/id` ref. Real case: a
+blocked entry of `*-contributor*` against pi's
+`opencode-go/muse-spark-1.2-contributor` matches zero models — the gate is
+a silent no-op. To match by substring across qualified ids, use `**/*`,
+which does cross `/`:
+
+- `*-contributor*` vs `opencode-go/muse-spark-1.2-contributor` → **no match**
+- `**/*-contributor*` vs the same ref (or its bare id) → match
+- `opencode-go/*contributor*` vs that provider's qualified ids → match
+
+The full rule is in the README's `models` config-table row.

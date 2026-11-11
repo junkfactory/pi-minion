@@ -359,7 +359,9 @@ shallow-merged over the built-in file above — present keys win (array
 fields like `models` and `providers` are replaced wholesale, not concatenated),
 absent keys fall through to the built-in value. A malformed or non-object
 override is ignored (with a `console.error` warning) rather than failing
-the extension.
+the extension. To match by substring across provider-qualified ids in
+`models.allowed`/`models.blocked`, use `**/*` (e.g. `**/*-contributor*`),
+not a single-`*` pattern.
 
 ## Development
 

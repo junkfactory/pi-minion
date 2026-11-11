@@ -2,6 +2,8 @@
 
 ## [0.1.0]
 
+- New Troubleshooting entry: why a substring-looking `models.blocked`/`models.allowed` pattern like `*-contributor*` silently matches nothing against provider-qualified ids (minimatch `*` does not cross `/`), and why `**/*-contributor*` does. The README documents the `**/*` rule alongside its pattern rules.
+
 - New `steer_pi_minion(id, message, deliverAs?)` tool: sends a mid-run message to a still-running job of this session. `deliverAs: "steer"` (default) lands after the current turn's tool calls and redirects the run; `"followUp"` queues the message for after the agent has no work left. Steering is supported by the pi and claude adapters only (agy and fm have no steering channel), and a settled job or a closed stdin channel rejects the message.
 - New optional `maxTurns` cap on `run_pi_minion` and in the config: a whole number from 1 to 100000, unlimited when absent. The tool param overrides the config default; a run that reaches the cap is cancelled with a `maxTurns=N reached` note. Workflows accept `maxTurns` per step and at the workflow level (step overrides workflow, then the config default).
 - `timeoutMs` is now an idle backstop rather than a wall-clock kill: every stdout line from the minion restarts the timer, so a long but productive run is never killed for taking too long and a stuck run's only kill is silence. A capped run is nudged once by steering ten turns before its cap (skipped when the cap is 10 turns or fewer, or the adapter has no steering channel), and each job's frontmatter now shows the resolved `maxTurns` (`maxTurns: none` when uncapped) so an unexpected cap can be traced.
