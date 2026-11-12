@@ -263,17 +263,17 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     // Optional in the schema so a prompt-only agent can be named instead; an
     // omitted model with no agent still fails, but in validateRequest.
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutModel), true);
-    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "model"), /Required unless the named `agent` supplies one/);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "model"), /Required unless the named `minion` supplies one/);
   });
 
-  it("accepts an agent, which is the only way model/effort may be omitted", () => {
-    const { model, effort, ...withoutModelEffort } = baseArgs({ agent: "code-reviewer" });
-    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...withoutModelEffort, agent: "code-reviewer" }), true);
-    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...baseArgs(), agent: 7 }), false);
-    const agent = descriptionOf(RUN_PI_MINION_PARAMETERS, "agent");
-    assert.match(agent, /help_pi_minion's `agents` list/);
-    assert.match(agent, /unknown name fails with the list of valid names/);
-    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `agent` supplies one/);
+  it("accepts a minion, which is the only way model/effort may be omitted", () => {
+    const { model, effort, ...withoutModelEffort } = baseArgs({ minion: "code-reviewer" });
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...withoutModelEffort, minion: "code-reviewer" }), true);
+    assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...baseArgs(), minion: 7 }), false);
+    const minion = descriptionOf(RUN_PI_MINION_PARAMETERS, "minion");
+    assert.match(minion, /help_pi_minion's `agents` list/);
+    assert.match(minion, /unknown name fails with the list of valid names/);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `minion` supplies one/);
   });
 
   it("accepts a timeoutMs and rejects a non-number", () => {
@@ -359,16 +359,16 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, args), true);
   });
 
-  it("rejects missing context or an empty step list, but takes a step's model/effort from its agent", () => {
+  it("rejects missing context or an empty step list, but takes a step's model/effort from its minion", () => {
     const { context, ...withoutContext } = args;
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, withoutContext), false);
     assert.equal(Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [] }), false);
     const { model, effort, ...stepWithoutModelEffort } = args.steps[0];
     assert.equal(
-      Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...stepWithoutModelEffort, agent: "reviewer" }] }),
+      Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...stepWithoutModelEffort, minion: "reviewer" }] }),
       true
     );
-    assert.match(descriptionOf(stepSchema(), "agent"), /help_pi_minion's `agents` list/);
+    assert.match(descriptionOf(stepSchema(), "minion"), /help_pi_minion's `agents` list/);
   });
 
   it("accepts a step's own timeoutMs and a workflow-level one", () => {
@@ -422,16 +422,16 @@ describe("parameter schema shape", () => {
 
   it("pins the run schema properties and required fields", () => {
     assert.deepEqual(keys(RUN_PI_MINION_PARAMETERS), [
-      "agent",
       "context",
       "effort",
       "maxBudgetUsd",
       "maxTurns",
+      "minion",
       "model",
       "task",
       "timeoutMs"
     ]);
-    // model/effort moved to optional so a named agent can supply them.
+    // model/effort moved to optional so a named minion can supply them.
     assert.deepEqual(required(RUN_PI_MINION_PARAMETERS), ["context", "task"]);
   });
 
@@ -450,12 +450,12 @@ describe("parameter schema shape", () => {
   it("pins the workflow step properties and required fields", () => {
     const step = stepSchema();
     assert.deepEqual(keys(step), [
-      "agent",
       "dependsOn",
       "effort",
       "id",
       "maxBudgetUsd",
       "maxTurns",
+      "minion",
       "model",
       "task",
       "timeoutMs"
@@ -470,12 +470,12 @@ describe("parameter schema shape", () => {
 
   it("pins the schedule schemas to the run/workflow fields plus cron", () => {
     assert.deepEqual(keys(SCHEDULE_PI_MINION_PARAMETERS), [
-      "agent",
       "context",
       "cron",
       "effort",
       "maxBudgetUsd",
       "maxTurns",
+      "minion",
       "model",
       "task",
       "timeoutMs"
@@ -529,8 +529,8 @@ describe("agent param", () => {
     assert.equal(pinned.agent, "code-reviewer");
   });
 
-  it("adds one help note pointing a matching task at `agent` instead of model+effort", () => {
-    const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `agent`"));
+  it("adds one help note pointing a matching task at `minion` instead of model+effort", () => {
+    const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `minion`"));
     assert.ok(note, "PI_MINION_USAGE_NOTES carries the agent usage note");
     assert.match(note!, /rather than picking model\+effort yourself/);
   });
@@ -694,7 +694,7 @@ describe("registerTools prompt footprint", () => {
         "every listed agent carries a name and description"
       );
       assert.ok(
-        payload.usageNotes?.some((note) => note.includes("pass `agent`")),
+        payload.usageNotes?.some((note) => note.includes("pass `minion`")),
         "payload.usageNotes carries the agent note"
       );
       assert.equal(typeof payload.modelRouting, "string", "payload.modelRouting must be a string");

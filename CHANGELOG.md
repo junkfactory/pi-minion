@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.1]
+
+- Rename the public `agent` parameter to `minion` for `run_pi_minion`, `schedule_pi_minion`, and workflow steps. Existing agent files and internal agent handling are unchanged.
+
 ## [0.2.0]
 
 - New specialized agents: markdown files in `~/.pi/agent/pi-minion/agents/` (filename stem = kebab-case name) whose body becomes the minion's system prompt — the shared operational tail is still appended — and whose frontmatter supplies optional `model`, `effort`, `tools`, `maxTurns`, `maxBudgetUsd`, and `timeoutMs` defaults. Pass `agent: "<name>"` to `run_pi_minion`, `schedule_pi_minion`, or a workflow step, with `model`/`effort` then optional; an explicit call param wins, then the file, then the config default. `help_pi_minion` lists `agents: [{name, description}]`. `tools` can only narrow `config.allowedTools` (an empty intersection is rejected, never widened) and it narrows the **claude adapter only** — every other adapter ignores the list (logged as `agent_tools_ignored`), so `tools: []` is an error for claude alone; an agent that defines no model/effort and a call that passes neither fails instructively, and invalid files are skipped with an `agent_invalid` lifecycle-log line. Agent jobs are titled `<agent>: <title>`, sub-sessions use `<agent>: <name>`, and schedule/workflow rows name the agent. Adds the `yaml` dependency for frontmatter parsing.

@@ -104,7 +104,7 @@ export const PI_MINION_USAGE_NOTES = [
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
   "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
   "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default (400 in the shipped config), and only with neither is the run unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
-  "when a task matches a listed agent's responsibility, pass `agent` rather than picking model+effort yourself: the agent supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win.",
+  "when a task matches a listed agent's responsibility, pass `minion` rather than picking model+effort yourself: the agent supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win.",
   "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
@@ -115,16 +115,16 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `agent` supplies one; explicit wins over the agent's default."
+        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `minion` supplies one; explicit wins over the agent's default."
     })
   ),
   effort: Type.Optional(
     Type.String({
       description:
-        "Required unless the named `agent` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency)."
+        "Required unless the named `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency)."
     })
   ),
-  agent: Type.Optional(
+  minion: Type.Optional(
     Type.String({
       description:
         "Optional: name a specialized agent from help_pi_minion's `agents` list — it supplies a curated system prompt and model/effort defaults; explicit model/effort still win. Names come only from that list; an unknown name fails with the list of valid names attached."
@@ -211,16 +211,16 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
       model: Type.Optional(
         Type.String({
           description:
-            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `agent` supplies one; explicit wins over the agent's default."
+            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `minion` supplies one; explicit wins over the agent's default."
         })
       ),
       effort: Type.Optional(
         Type.String({
           description:
-            "Required unless this step's `agent` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes."
+            "Required unless this step's `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes."
         })
       ),
-      agent: Type.Optional(
+      minion: Type.Optional(
         Type.String({
           description:
             "Optional: name a specialized agent from help_pi_minion's `agents` list — curated system prompt plus model/effort defaults; explicit model/effort still win. Names come only from that list; an unknown name fails with the list of valid names attached."
@@ -262,17 +262,17 @@ export const SCHEDULE_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
 // model/effort are optional in the tool schemas so a named agent can supply
 // them (validateRequest merges the agent's defaults). The stored request and
 // workflow shapes are string-typed, where "" defers to the agent.
-function withAgentDefaults<T extends { model?: string; effort?: string }>(
+function withAgentDefaults<T extends { model?: string; effort?: string; minion?: string }>(
   request: T
-): T & { model: string; effort: string } {
-  return { ...request, model: request.model ?? "", effort: request.effort ?? "" };
+): T & { agent?: string; model: string; effort: string } {
+  return { ...request, agent: request.minion, model: request.model ?? "", effort: request.effort ?? "" };
 }
 
 // A workflow call after withAgentDefaults: same schema fields, with the
 // step's model/effort present as strings.
 type WorkflowRequest = Static<typeof RUN_PI_MINION_WORKFLOW_PARAMETERS>;
 type NormalizedWorkflowRequest = Omit<WorkflowRequest, "steps"> & {
-  steps: Array<WorkflowRequest["steps"][number] & { model: string; effort: string }>;
+  steps: Array<WorkflowRequest["steps"][number] & { agent?: string; model: string; effort: string }>;
 };
 
 function normalizeWorkflowRequest(request: WorkflowRequest): NormalizedWorkflowRequest {
@@ -713,7 +713,7 @@ export function registerTools(pi: ExtensionAPI): void {
         request: pinScheduleRequest(request, config),
         // Raw pre-merge capture so agent-frontmatter edits reach future
         // ticks; only stored when an agent actually applies.
-        rawRequest: rest.agent?.trim()
+        rawRequest: rest.minion?.trim()
           ? { ...withAgentDefaults(rest), workspace: ctx.cwd }
           : undefined,
         effort: request.effort,
