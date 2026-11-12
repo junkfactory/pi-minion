@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, it } from "node:test";
+import { after, beforeEach, describe, it } from "node:test";
 import {
   buildArgs,
   createAgyAdapter,
@@ -574,6 +574,7 @@ describe("parseLine", () => {
 
 describe("refreshAgyModels", () => {
   const bin = mkdtempSync(join(tmpdir(), "pi-minion-agy-"));
+  after(() => rmSync(bin, { recursive: true, force: true }));
   const realPath = process.env.PATH;
   const fakeAgy = (payload: string) => {
     writeFileSync(join(bin, "agy"), `#!/bin/sh\necho '${payload}'\n`);

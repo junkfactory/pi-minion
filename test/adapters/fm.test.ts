@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import {
   buildArgs,
   createFmAdapter,
@@ -273,31 +273,43 @@ describe("getSchemaPath (bundled schema validation)", () => {
 
   it("accepts an equivalent schema with a different key order", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-minion-fm-schema-"));
-    const file = join(dir, "schema.json");
-    writeFileSync(
-      file,
-      JSON.stringify({ required: ["result"], properties: { result: { type: "string" } }, type: "object" })
-    );
-    assert.equal(getSchemaPath(file), file);
+    try {
+      const file = join(dir, "schema.json");
+      writeFileSync(
+        file,
+        JSON.stringify({ required: ["result"], properties: { result: { type: "string" } }, type: "object" })
+      );
+      assert.equal(getSchemaPath(file), file);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a tampered schema file", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-minion-fm-schema-"));
-    const file = join(dir, "schema.json");
-    writeFileSync(
-      file,
-      JSON.stringify({ type: "object", properties: { result: { type: "number" } }, required: ["result"] })
-    );
-    assert.throws(() => getSchemaPath(file), /does not match the expected default schema/);
+    try {
+      const file = join(dir, "schema.json");
+      writeFileSync(
+        file,
+        JSON.stringify({ type: "object", properties: { result: { type: "number" } }, required: ["result"] })
+      );
+      assert.throws(() => getSchemaPath(file), /does not match the expected default schema/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a missing or unparseable schema file", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-minion-fm-schema-"));
-    const missing = join(dir, "nope.json");
-    assert.throws(() => getSchemaPath(missing), /cannot read the bundled schema file/);
-    const corrupt = join(dir, "corrupt.json");
-    writeFileSync(corrupt, "{not json");
-    assert.throws(() => getSchemaPath(corrupt), /cannot read the bundled schema file/);
+    try {
+      const missing = join(dir, "nope.json");
+      assert.throws(() => getSchemaPath(missing), /cannot read the bundled schema file/);
+      const corrupt = join(dir, "corrupt.json");
+      writeFileSync(corrupt, "{not json");
+      assert.throws(() => getSchemaPath(corrupt), /cannot read the bundled schema file/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -432,6 +444,7 @@ describe("capabilities", () => {
 
 describe("refreshCatalog", () => {
   const bin = mkdtempSync(join(tmpdir(), "pi-minion-fm-"));
+  after(() => rmSync(bin, { recursive: true, force: true }));
   const realPath = process.env.PATH;
   // A fake `fm` is the only way to drive refreshCatalog: it shells out to
   // whatever `fm` PATH resolves to, so the fixtures below shadow the real
@@ -476,6 +489,7 @@ describe("refreshCatalog", () => {
       await assert.doesNotReject(refreshCatalog());
     } finally {
       process.env.PATH = realPath;
+      rmSync(empty, { recursive: true, force: true });
     }
   });
 });
