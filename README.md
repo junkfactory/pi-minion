@@ -478,3 +478,18 @@ which re-exports `src/pi-minion.ts`; there is no compiled artifact).
    the live smoke battery for behavioral changes (job lifecycle,
    routing/model filtering, workflows, status/error reporting), and the
    interactive checks for TUI changes.
+
+**Releases** — cut from a clean working copy on `main`:
+
+```bash
+./.github/ci/tag.sh 0.2.5      # add DRY_RUN=1 to preview
+```
+
+The script runs the checks, appends a `## [X.Y.Z]` section to
+[CHANGELOG.md](CHANGELOG.md) from the commit subjects since the last `v*` tag
+(a hand-written section wins — write your prose first and generation skips),
+commits `chore: release vX.Y.Z` with the version bump, moves `main` and the
+`v*` tag onto that commit, and pushes both. The tag push triggers the `release`
+CI job, which validates the tag against the tagged commit's `package.json` and
+creates the GitHub Release with generated notes. Verify with `gh run list` and
+`gh release list`.
