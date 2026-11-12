@@ -516,16 +516,33 @@ describe("workflow step naming and picker rows", () => {
     assert.equal(workflowStepTitle("Review MR", "bugs"), "Review MR › bugs");
   });
 
-  it("lists the workflow row then only its running step jobs", () => {
+  it("lists the workflow row then each started step's job", () => {
     const wf = fakeWorkflow();
     wf.steps[0]!.status = "running";
     wf.steps[0]!.jobId = "job-a";
     wf.steps[0]!.model = "haiku";
-    wf.steps[1]!.status = "pending";
+    wf.steps[1]!.status = "done";
+    wf.steps[1]!.jobId = "job-b";
+    wf.steps[1]!.model = "sonnet";
+    wf.steps.push({ id: "lint", task: "t", model: "haiku", effort: "low", dependsOn: [], status: "pending" });
     const rows = workflowPickerRows("wf1", wf);
     assert.deepEqual(rows, [
       { id: "wf1", label: formatWorkflowLabel(wf) },
-      { id: "job-a", label: `  › ${wf.steps[0]!.id} - haiku` }
+      { id: "job-a", label: `  › ${wf.steps[0]!.id} - haiku` },
+      { id: "job-b", label: `  › ✓ ${wf.steps[1]!.id} - sonnet` }
+    ]);
+  });
+
+  it("marks a failed step's job row", () => {
+    const wf = fakeWorkflow();
+    wf.steps[0]!.status = "failed";
+    wf.steps[0]!.jobId = "job-x";
+    wf.steps[0]!.model = "haiku";
+    delete wf.steps[1]!.jobId;
+    const rows = workflowPickerRows("wf1", wf);
+    assert.deepEqual(rows, [
+      { id: "wf1", label: formatWorkflowLabel(wf) },
+      { id: "job-x", label: `  › ✗ ${wf.steps[0]!.id} - haiku` }
     ]);
   });
 });

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { JobUI } from "./minion.ui.js";
 import type { AgentCliAdapter, NormalizedEvent } from "./adapters/types.js";
+import type { JobMetaEntry } from "./job-types.js";
 import { getAdapter, listAdapterNames, resolveAdapterForModel } from "./adapters/registry.js";
 import { getJobUI, JOB_ROOT, jobMeta } from "./job-store.js";
 import { logJobEvent } from "./log.js";
@@ -86,6 +87,26 @@ export async function backfillModal(
   for (const line of raw.split(/\r?\n/)) {
     for (const event of adapter.parseLine(line)) applyModalEvent(jobUI, id, event);
   }
+}
+
+// Opens a job's preview modal: live stream if the job is running
+// (applyModalEvent routing), else a replay of stdout.json from disk.
+// A terminal jobMeta gets finishModalJob so the modal shows its finished
+// marker instead of a spinner (mirrors trail-picker's openDetailForJob).
+export async function openJobPreview(
+  jobUI: JobUI,
+  id: string,
+  meta: Pick<JobMetaEntry, "title" | "model" | "effort" | "prompt" | "resolvedModel">
+): Promise<void> {
+  jobUI.openModal(id, {
+    title: meta.title,
+    model: meta.resolvedModel ?? meta.model,
+    effort: meta.effort,
+    prompt: meta.prompt
+  });
+  await backfillModal(join(JOB_ROOT, id), resolveAdapterForJob(meta.model), jobUI, id);
+  const stored = jobMeta.get(id);
+  if (stored && stored.status !== "running") jobUI.finishModalJob(id);
 }
 
 // A job's recorded model (or the "?" placeholder when even jobMeta has no
@@ -209,7 +230,7 @@ export async function openPiMinionsPicker(ctx: ExtensionContext): Promise<void> 
       return;
     }
 
-    // Running row / unknown id — today's openModal + backfill, unchanged.
+    // Running row / unknown id — the preview helper owns openModal + backfill.
     const fallback = jobMeta.get(id) ?? {
       title: "pi minion task",
       model: "?",
@@ -218,13 +239,7 @@ export async function openPiMinionsPicker(ctx: ExtensionContext): Promise<void> 
       sessionId,
       status: "running" as const
     };
-    jobUI.openModal(id, {
-      title: fallback.title,
-      model: fallback.resolvedModel ?? fallback.model,
-      effort: fallback.effort,
-      prompt: fallback.prompt
-    });
-    await backfillModal(join(JOB_ROOT, id), resolveAdapterForJob(fallback.model), jobUI, id);
+    await openJobPreview(jobUI, id, fallback);
     return;
   }
 }

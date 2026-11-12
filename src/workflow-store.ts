@@ -456,16 +456,17 @@ export function workflowStepTitle(workflowTitle: string, stepId: string): string
 }
 
 // Picker rows for a running workflow: its ⇉ row (⇉ is present in common
-// monospace fonts; ⛓ and ⏱ are not), then each running step's
-// job indented beneath it.
+// monospace fonts; ⛓ and ⏱ are not), then each started step's job indented
+// beneath it — running and finished alike, so mid-run a completed step can
+// still be previewed.
 export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: string; label: string }> {
   return [
     { id, label: formatWorkflowLabel(wf) },
-    ...wf.steps.flatMap((step) =>
-      step.status === "running" && step.jobId
-        ? [{ id: step.jobId, label: `  › ${step.id} - ${step.model || `minion ${step.minion}`}` }]
-        : []
-    )
+    ...wf.steps.flatMap((step) => {
+      if (!step.jobId) return [];
+      const mark = step.status === "done" ? "✓ " : step.status === "failed" ? "✗ " : "";
+      return [{ id: step.jobId, label: `  › ${mark}${step.id} - ${step.model || `minion ${step.minion}`}` }];
+    })
   ];
 }
 
