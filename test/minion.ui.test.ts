@@ -200,6 +200,30 @@ describe("workflow widget", () => {
     assert.match(lines[3]!, /verify \(gpt-6-luna\/low\)/);
   });
 
+  it("prefixes a named minion's step row with <minion>: <id> and keeps the live preview", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setJob("job1", job({ title: "Verify", model: "luna", previewLine: "Reading auth.ts" }));
+    const wf = workflow();
+    wf.steps[2] = { ...wf.steps[2], minion: "reviewer" };
+    jobUI.setWorkflow("wf", wf);
+
+    const [, ...lines] = state.widgetFactory!(fakeTui(), fakeTheme()).render(100);
+
+    assert.match(lines[3]!, /├─ \S+ reviewer: verify \(luna\/low\).* · Reading auth\.ts/);
+  });
+
+  it("renders a minion-less step row with the bare id after the marker", () => {
+    const { ctx, state } = fakeCtx();
+    const jobUI = createJobUI(ctx as any);
+    jobUI.setWorkflow("wf", workflow());
+
+    const [, ...lines] = state.widgetFactory!(fakeTui(), fakeTheme()).render(100);
+
+    assert.match(lines[1]!, /├─ ✓ bugs \(sonnet\/medium\)/);
+    assert.doesNotMatch(lines[1]!, /✓ [^ ]+: bugs/);
+  });
+
   it("keeps the widget up until both jobs and workflows are cleared", () => {
     const { ctx, state } = fakeCtx();
     const jobUI = createJobUI(ctx as any);

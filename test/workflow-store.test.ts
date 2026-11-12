@@ -617,6 +617,14 @@ describe("workflow status helpers", () => {
     assert.deepEqual(workflowWidgetStatus(wf).steps[0].turns, { current: 4, max: 20 });
     assert.equal(workflowWidgetStatus(wf).steps[1].turns, undefined);
   });
+
+  it("carries a step's named minion into the widget status", () => {
+    const wf = fakeWorkflow();
+    wf.steps[0].minion = "reviewer";
+    const status = workflowWidgetStatus(wf);
+    assert.equal(status.steps[0].minion, "reviewer");
+    assert.equal(status.steps[1].minion, undefined);
+  });
 });
 
 describe("session ownership", () => {

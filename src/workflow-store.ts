@@ -662,6 +662,7 @@ export function workflowWidgetStatus(
       status: step.status,
       model: (step.jobId && resolvedModel(step.jobId)) || step.model,
       effort: step.effort,
+      minion: step.minion,
       jobId: step.jobId,
       startedAt: step.startedAt,
       finishedAt: step.finishedAt,

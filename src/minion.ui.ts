@@ -98,6 +98,7 @@ export type WorkflowWidgetStatus = {
     status: WorkflowStepStatus;
     model: string;
     effort: string;
+    minion?: string;
     jobId?: string;
   } & Partial<StepRunStats>>;
 };
@@ -339,7 +340,7 @@ function formatWorkflowBlock(
     // A running step reads its live job row; a finished one the stats its job
     // left behind; a pending one just its model/effort.
     const meta = formatJobMeta(theme, live ? { ...live, effort: step.effort } : step);
-    const body = `${marker} ${step.id} ${meta}${live ? dim(` · ${live.previewLine ?? "Working…"}`) : ""}`;
+    const body = `${marker} ${step.minion ? `${step.minion}: ` : ""}${step.id} ${meta}${live ? dim(` · ${live.previewLine ?? "Working…"}`) : ""}`;
     lines.push(`${dim(`${vbar}  ${stepConnector}`)} ${body}`);
   });
   return lines;
