@@ -64,11 +64,31 @@ describe("MINION_DIR", () => {
 });
 
 describe("listMinions", () => {
-  it("returns name and description only, sorted, for valid .md files", async () => {
+  it("returns name, description, model and effort, sorted, for valid .md files", async () => {
     await withMinions({ "zebra.md": MINIMAL, "review.md": REVIEW }, async (dir, _logs, log) => {
       assert.deepEqual(await listMinions(dir, log), [
-        { name: "review", description: "Reviews changes for correctness and security" },
-        { name: "zebra", description: "Prompt-only minion" }
+        {
+          name: "review",
+          description: "Reviews changes for correctness and security",
+          model: "qwen-flash",
+          effort: "high"
+        },
+        { name: "zebra", description: "Prompt-only minion", model: null, effort: null }
+      ]);
+    });
+  });
+
+  it("surfaces model and effort from frontmatter", async () => {
+    const content = `---
+description: Sonnet minion
+model: sonnet
+effort: high
+---
+body
+`;
+    await withMinions({ "sonnet.md": content }, async (dir, _logs, log) => {
+      assert.deepEqual(await listMinions(dir, log), [
+        { name: "sonnet", description: "Sonnet minion", model: "sonnet", effort: "high" }
       ]);
     });
   });
@@ -86,7 +106,9 @@ describe("listMinions", () => {
     await withMinions({}, async (dir, _logs, log) => {
       assert.deepEqual(await listMinions(dir, log), []);
       await writeFile(join(dir, "fresh.md"), MINIMAL, "utf8");
-      assert.deepEqual(await listMinions(dir, log), [{ name: "fresh", description: "Prompt-only minion" }]);
+      assert.deepEqual(await listMinions(dir, log), [
+        { name: "fresh", description: "Prompt-only minion", model: null, effort: null }
+      ]);
     });
   });
 
@@ -106,7 +128,7 @@ describe("listMinions", () => {
       { ".notes.md.swp": REVIEW, ".gitkeep": "", "fresh.md": MINIMAL },
       async (dir, logs, log) => {
         assert.deepEqual(await listMinions(dir, log), [
-          { name: "fresh", description: "Prompt-only minion" }
+          { name: "fresh", description: "Prompt-only minion", model: null, effort: null }
         ]);
         assert.equal(logs.length, 0);
       }
@@ -336,7 +358,7 @@ ${BODY}
           config,
           dir
         ),
-        /minion 'prompt-only' defines no model — pass `model` explicitly/
+        /minion 'prompt-only' defines no model — classify the task against help_pi_minion's `modelRouting` table and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
       );
     });
   });

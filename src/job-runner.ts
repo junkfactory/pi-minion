@@ -148,12 +148,12 @@ async function applyMinionRequest(
   const model = request.model?.trim() || minion.model;
   if (!model)
     throw new Error(
-      `minion '${name}' defines no model — pass \`model\` explicitly. Call help_pi_minion for the models usable here.`
+      `minion '${name}' defines no model — classify the task against help_pi_minion's \`modelRouting\` table and pass \`model\` explicitly. Confirm the resolved id appears in help_pi_minion's \`models\` list.`
     );
   const effort = request.effort?.trim() || minion.effort;
   if (!effort)
     throw new Error(
-      `minion '${name}' defines no effort — pass \`effort\` explicitly: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
+      `minion '${name}' defines no effort — pass \`effort\` explicitly, from the \`modelRouting\` table's effort level for this task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
     );
   // Only claude narrows: the other adapters never read request.allowedTools,
   // so narrowing for them would claim a restriction the run does not have.

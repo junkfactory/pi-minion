@@ -280,15 +280,20 @@ explicit values stay pinned). Deleting the minion file makes the next tick
 fail to start with an instructive error.
 
 - Pass `minion` on `run_pi_minion`, `schedule_pi_minion`, or a workflow step.
-  With a minion, `model`/`effort` may be omitted when the file supplies them.
-  `help_pi_minion` lists the available minions as
-  `minions: [{name, description}]`; `list_pi_minions` and
-  `list_pi_minion_schedules` report each row's captured minion under the
-  `minion` field; unknown names fail with the available names attached.
+  With a minion, `model`/`effort` may be omitted only when the file supplies
+  them. `help_pi_minion` lists the available minions as
+  `minions: [{name, description, model, effort}]`, where each value is the
+  file's frontmatter default or `null` when the file defines none — a `null`
+  means the caller must pass that field, picked by matching the task against
+  `help_pi_minion`'s `modelRouting` table (responsibility → model family +
+  effort). `list_pi_minions` and `list_pi_minion_schedules` report each row's
+  captured minion under the `minion` field; unknown names fail with the
+  available names attached.
 - Precedence per field: explicit call param > frontmatter > `pi-minion.json`
   default. `model`/`effort` have no config default, so a minion that defines
   neither and a call that passes neither is rejected with an error naming the
-  minion and pointing at `help_pi_minion`'s models.
+  minion and pointing at `help_pi_minion`'s `modelRouting` table, which
+  resolves the task to a model family and an effort level.
 - `tools` can only narrow: the effective list is the minion's entries
   intersected with `config.allowedTools` (minimatch globs). An empty
   intersection is rejected — never silently widened, since for claude an empty

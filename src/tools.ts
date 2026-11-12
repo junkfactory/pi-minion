@@ -104,7 +104,7 @@ export const PI_MINION_USAGE_NOTES = [
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
   "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
   "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default (400 in the shipped config), and only with neither is the run unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
-  "when a task matches a listed minion's responsibility, pass `minion` rather than picking model+effort yourself: the minion supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win.",
+  "when a task matches a listed minion's responsibility, pass `minion`: the minion supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win. If the minion's entry in `minions` shows `model: null` or `effort: null`, the file defines none — classify the task against the `modelRouting` table and pass the matching value(s) explicitly.",
   "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
 ];
 
@@ -115,13 +115,13 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `minion` supplies one; explicit wins over the minion's default."
+        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `modelRouting` table yourself."
     })
   ),
   effort: Type.Optional(
     Type.String({
       description:
-        "Required unless the named `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency)."
+        "Required unless the named `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency). A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `modelRouting` row's First Choice (or Fallback) cell yourself."
     })
   ),
   minion: Type.Optional(
@@ -211,13 +211,13 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
       model: Type.Optional(
         Type.String({
           description:
-            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `minion` supplies one; explicit wins over the minion's default."
+            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `modelRouting` table yourself."
         })
       ),
       effort: Type.Optional(
         Type.String({
           description:
-            "Required unless this step's `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes."
+            "Required unless this step's `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes. A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `modelRouting` row's First Choice (or Fallback) cell yourself."
         })
       ),
       minion: Type.Optional(

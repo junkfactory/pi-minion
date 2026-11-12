@@ -317,7 +317,7 @@ describe("validateRequest minion requests", () => {
             fakeConfig(),
             minions
           ),
-          /minion 'reviewer' defines no model — pass `model` explicitly/
+          /minion 'reviewer' defines no model — classify the task against help_pi_minion's `modelRouting` table and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
         );
       }
     );
@@ -334,7 +334,7 @@ describe("validateRequest minion requests", () => {
             fakeConfig(),
             minions
           ),
-          /minion 'reviewer' defines no effort/
+          /minion 'reviewer' defines no effort — pass `effort` explicitly, from the `modelRouting` table's effort level for this task/
         );
       }
     );

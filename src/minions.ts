@@ -22,10 +22,13 @@ const KEBAB_CASE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export interface MinionSummary {
   name: string;
   description: string;
+  model: string | null;
+  effort: string | null;
 }
 
 // Parsed frontmatter plus the body, which is the minion's system prompt.
-export interface MinionDefinition extends MinionSummary {
+// model/effort stay optional here (the summary surfaces their absence as null).
+export interface MinionDefinition extends Omit<MinionSummary, "model" | "effort"> {
   model?: string;
   effort?: string;
   tools?: string[];
@@ -184,7 +187,14 @@ export async function listMinions(
   dir: string = MINION_DIR,
   log: MinionLog = defaultLog
 ): Promise<MinionSummary[]> {
-  return (await scanMinions(dir, log)).map(({ name, description }) => ({ name, description }));
+  return (await scanMinions(dir, log)).map(
+    ({ name, description, model, effort }) => ({
+      name,
+      description,
+      model: model ?? null,
+      effort: effort ?? null
+    })
+  );
 }
 
 export async function resolveMinion(

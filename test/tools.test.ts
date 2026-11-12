@@ -274,6 +274,7 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.match(minion, /help_pi_minion's `minions` list/);
     assert.match(minion, /unknown name fails with the list of valid names/);
     assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `minion` supplies one/);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /modelRouting/);
   });
 
   it("accepts a timeoutMs and rejects a non-number", () => {
@@ -532,7 +533,8 @@ describe("minion param", () => {
   it("adds one help note pointing a matching task at `minion` instead of model+effort", () => {
     const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `minion`"));
     assert.ok(note, "PI_MINION_USAGE_NOTES carries the minion usage note");
-    assert.match(note!, /rather than picking model\+effort yourself/);
+    assert.match(note!, /shows .model: null. or .effort: null./);
+    assert.match(note!, /classify the task against the .modelRouting. table/);
   });
 });
 
@@ -546,8 +548,32 @@ describe("buildHelpMinionList", () => {
         "---\ndescription: Reviews changes for correctness\n---\n\nYou review code.\n"
       );
       assert.deepEqual(await buildHelpMinionList(dir), [
-        { name: "code-reviewer", description: "Reviews changes for correctness" }
+        {
+          name: "code-reviewer",
+          description: "Reviews changes for correctness",
+          model: null,
+          effort: null
+        }
       ]);
+      // Prompt-only fixture above pins the null case; a minion that defines
+      // both carries the frontmatter strings through unchanged.
+      await writeFile(
+        join(dir, "implementer.md"),
+        "---\ndescription: Implements changes\nmodel: sonnet\neffort: medium\n---\n\nBody.\n"
+      );
+      const listed = await buildHelpMinionList(dir);
+      assert.deepEqual(listed[0], {
+        name: "code-reviewer",
+        description: "Reviews changes for correctness",
+        model: null,
+        effort: null
+      });
+      assert.deepEqual(listed[1], {
+        name: "implementer",
+        description: "Implements changes",
+        model: "sonnet",
+        effort: "medium"
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -685,13 +711,21 @@ describe("registerTools prompt footprint", () => {
       );
       const payload = result.details as {
         modelRouting?: string;
-        minions?: Array<{ name: string; description: string }>;
+        minions?: Array<{ name: string; description: string; model: string | null; effort: string | null }>;
         usageNotes?: string[];
       };
       assert.ok(Array.isArray(payload.minions), "payload.minions must be a list");
       assert.ok(
         payload.minions!.every((minion) => typeof minion.name === "string" && typeof minion.description === "string"),
         "every listed minion carries a name and description"
+      );
+      assert.ok(
+        payload.minions!.every(
+          (minion) =>
+            (typeof minion.model === "string" || minion.model === null) &&
+            (typeof minion.effort === "string" || minion.effort === null)
+        ),
+        "every listed minion carries model/effort as a string or null"
       );
       assert.ok(
         payload.usageNotes?.some((note) => note.includes("pass `minion`")),

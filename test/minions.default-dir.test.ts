@@ -47,7 +47,7 @@ describe("default definition directory", () => {
 
   it("reads definitions from the minions/ directory", async () => {
     assert.deepEqual(await listMinions(undefined, log), [
-      { name: "review", description: "From the minions directory" }
+      { name: "review", description: "From the minions directory", model: "sonnet", effort: null }
     ]);
     assert.equal((await resolveMinion("review", undefined, log)).body, "body");
   });

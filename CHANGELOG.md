@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.3]
+
+- `help_pi_minion`'s `minions` list now surfaces each minion's `model` and `effort` (the file's frontmatter value, or `null` when it defines none), so the caller can see before calling that a missing field must be passed explicitly, picked by matching the task against `help_pi_minion`'s `modelRouting` table (responsibility → model family + effort). Both runtime errors now name that table too: a minion that defines no model says to classify the task against it, and one that defines no effort says to take the effort from the effort after the `/` in the matching routing row.
+
 ## [0.2.2]
 
 - Rename pi-minion's specialized-definition terminology from "agent" to "minion" throughout. Definition files now live in `~/.pi/agent/pi-minion/minions/`; the old `~/.pi/agent/pi-minion/agents/` directory is no longer read — there is no fallback and no automatic migration, so move definitions by hand. The file format (frontmatter keys, body-as-system-prompt) is unchanged.
