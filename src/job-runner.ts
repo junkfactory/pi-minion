@@ -94,26 +94,26 @@ export function resolveMaxTurns(
 // list is ignored and logged rather than pretended. An empty result is a hard
 // error — claude receives no --allowedTools at all for an empty list, which
 // means unrestricted, so returning [] would silently widen the surface instead
-// of narrowing it. A config allowlist of [] pins nothing (empty = no
-// allowlist, same convention as models.allowed), so the minion's own list is
+// of narrowing it. A config cap of [] or an absent cap pins nothing (empty =
+// no cap, same convention as models.allowed), so the minion's own list is
 // already the narrowing.
 function narrowAllowedTools(
   minionName: string,
   tools: string[] | undefined,
-  allowedTools: string[]
+  allowedTools: string[] | undefined
 ): string[] | undefined {
-  if (tools === undefined) return undefined; // No frontmatter tools: inherit config.allowedTools.
+  if (tools === undefined) return undefined; // No frontmatter tools: inherit the config cap (unrestricted when unset).
   if (tools.length === 0)
     throw new Error(
-      `minion '${minionName}' lists no tools — for claude an empty list means unrestricted, not a restriction. Omit \`tools\` to inherit config.allowedTools.`
+      `minion '${minionName}' lists no tools — for claude an empty list means unrestricted, not a restriction. Omit \`tools\` to inherit the config's allowedTools cap (unrestricted when unset).`
     );
-  if (allowedTools.length === 0) return tools;
+  if (allowedTools === undefined || allowedTools.length === 0) return tools;
   const permitted = tools.filter((tool) =>
     allowedTools.some((pattern) => minimatch(tool, pattern, { nonegate: true }))
   );
   if (permitted.length === 0)
     throw new Error(
-      `minion '${minionName}' allows only ${tools.join(", ")}, none of which config.allowedTools permits (${allowedTools.join(", ")}). Add a matching tool to config.allowedTools, or drop \`tools\` from the minion file.`
+      `minion '${minionName}' allows only ${tools.join(", ")}, none of which config.allowedTools permits (${allowedTools.join(", ")}). Add a matching tool to the config's allowedTools, or drop \`tools\` from the minion file.`
     );
   return permitted;
 }

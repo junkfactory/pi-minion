@@ -1,17 +1,6 @@
 {
   "models": { "allowed": [], "blocked": [] },
   "providers": { "allowed": [], "blocked": [] },
-  "allowedTools": [
-    "Bash",
-    "Edit",
-    "Glob",
-    "Grep",
-    "Read",
-    "WebFetch",
-    "WebSearch",
-    "Write",
-    "mcp__*"
-  ],
   "maxBudgetUsd": 5,
   "timeoutMs": 600000,
   "maxTurns": 400,

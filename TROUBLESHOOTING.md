@@ -177,14 +177,16 @@ TUI session (headless run or captured stderr), so check there first.
 
 **`run_pi_minion` throws `Invalid pi-minion configuration (after merging
 ... over ...)`.**
-`loadConfig()` throws this once the merged config is missing (or has the
-wrong type for) `models` or `allowedTools`. Two ways to hit it:
+`loadConfig()` throws this once the merged config has a wrong-typed
+field (`models`, `providers`, `allowedTools`, `adapterArgs`,
+`usageNotes`, `routingTable`, `costGate`, or `maxTurns`). Two ways to
+hit it:
 
 - The override file at `~/.pi/agent/extensions/pi-minion.json` is valid
-  JSON but sets one of those two fields to something falsy or
+  JSON but sets one of those fields to something falsy or
   wrong-shaped (e.g. `models.allowed` as a string instead of an array) —
   fix the override.
-- You edited `pi-minion.json`'s required fields (added/removed/renamed
+- You edited the validated fields (added/removed/renamed
   one) in `src/config.ts` and/or the bundled `pi-minion.json` in a pi session
   that was already running — extensions load once per process (see the
   `jobUI`/`jobMeta` state in `src/job-store.ts`), so the running

@@ -45,11 +45,12 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
   // positional prompt, which is what keeps the channel open for steering and
   // for the stdin close that lets the CLI exit.
   // A named minion narrows config.allowedTools to request.allowedTools; absent
-  // (no minion), the config list is used unchanged.
-  const allowedTools = request.allowedTools ?? config.allowedTools;
+  // (no minion), the config cap is used unchanged. Both may be absent — no
+  // config cap, no minion tools — and then no --allowedTools is emitted: the
+  // run is unrestricted under --permission-mode auto.
+  const allowedTools = request.allowedTools ?? config.allowedTools ?? [];
   return [
     "-p",
-    "--disable-slash-commands",
     "--no-chrome",
     "--no-session-persistence",
     "--input-format",

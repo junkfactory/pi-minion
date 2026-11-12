@@ -53,6 +53,31 @@ describe("loadConfig", () => {
     }
   });
 
+  it("loads when allowedTools is absent — the cap is optional", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      // JSON.stringify drops undefined values, so this merge carries {} —
+      // the assertion rides on the shipped pi-minion.json omitting the field.
+      await writeFile(overridePath, JSON.stringify({}), "utf8");
+      const config = await loadConfig(overridePath);
+      assert.equal(config.allowedTools, undefined);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("throws when a merged override gives allowedTools the wrong type", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(overridePath, JSON.stringify({ allowedTools: "Bash" }), "utf8");
+      await assert.rejects(loadConfig(overridePath), /Invalid pi-minion configuration/);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
   it("throws when a merged override gives models.allowed the wrong type", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     const overridePath = join(dir, "pi-minion.json");

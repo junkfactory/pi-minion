@@ -80,7 +80,7 @@ export async function loadConfig(overridePath: string = USER_CONFIG_PATH): Promi
   const adapterArgs =
     config.adapterArgs === undefined ? undefined : normalizeAdapterArgs(config.adapterArgs);
   if (
-    !Array.isArray(config.allowedTools) ||
+    (config.allowedTools !== undefined && !isStrings(config.allowedTools)) ||
     (config.models !== undefined && !isAllowDenyShape(config.models)) ||
     (config.providers !== undefined && !isAllowDenyShape(config.providers)) ||
     (config.adapterArgs !== undefined && adapterArgs === undefined) ||

@@ -586,6 +586,11 @@ describe("toolResults", () => {
 });
 
 describe("buildArgs", () => {
+  it("never emits --disable-slash-commands — skills and slash commands stay enabled", () => {
+    const args = buildArgs(fakeRequest(), fakeConfig());
+    assert.ok(!args.includes("--disable-slash-commands"));
+  });
+
   it("omits optional flags when not requested", () => {
     const args = buildArgs(fakeRequest(), fakeConfig());
     assert.ok(!args.includes("--allowedTools"));
@@ -595,6 +600,11 @@ describe("buildArgs", () => {
       "--input-format",
       "stream-json"
     ]);
+  });
+
+  it("omits --allowedTools when the config sets no cap (absent allowedTools)", () => {
+    const args = buildArgs(fakeRequest(), { ...fakeConfig(), allowedTools: undefined });
+    assert.ok(!args.includes("--allowedTools"));
   });
 
   it("includes allowedTools and effort when present", () => {

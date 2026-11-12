@@ -29,7 +29,11 @@ export type MinionConfig = {
   // list and to validateRequest, same hide-and-reject contract as
   // models.allowed/models.blocked. Replaced wholesale by user override.
   providers?: { allowed?: string[]; blocked?: string[] };
-  allowedTools: string[];
+  // Global claude tool cap, passed as --allowedTools; the other adapters
+  // never read it (pi auto-approves, agy skips permissions, fm has no
+  // tools). Absent = no global cap: claude runs unrestricted unless a
+  // minion file's `tools` narrows it. Validated at load when present.
+  allowedTools?: string[];
   maxBudgetUsd: number;
   timeoutMs: number;
   // Optional turn cap applied to every run that omits MinionRequest.maxTurns;
@@ -97,8 +101,8 @@ export type MinionRequest = {
   // appended). Absent = the adapter uses MINION_PROMPT_BASE unchanged.
   systemPrompt?: string;
   // Set by validateRequest() for a minion request whose file declares `tools`:
-  // that list narrowed to config.allowedTools. Absent = the adapter uses
-  // config.allowedTools.
+  // that list narrowed to the config's allowedTools cap when one is set.
+  // Absent = the adapter uses the config cap (unrestricted when unset).
   allowedTools?: string[];
 };
 

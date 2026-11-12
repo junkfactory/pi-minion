@@ -510,6 +510,21 @@ describe("validateRequest minion requests", () => {
       );
     });
 
+    it("uses the minion's own tools as written when the config sets no allowedTools cap", async () => {
+      await withMinionDir(
+        { "scoped.md": minionFile("description: Scoped\nmodel: sonnet\ntools: [Bash, Grep]") },
+        async ({ workspace, minions }) => {
+          const scoped = await validateRequest(
+            fakeRequest({ workspace, minion: "scoped" }),
+            workspace,
+            { ...fakeConfig(), allowedTools: undefined },
+            minions
+          );
+          assert.deepEqual(scoped.allowedTools, ["Bash", "Grep"]);
+        }
+      );
+    });
+
     it("still rejects an empty intersection", async () => {
       await withMinionDir(
         { "locked.md": minionFile("description: Locked\nmodel: sonnet\ntools: [WebFetch]") },
