@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.4]
+
+- While a workflow is running, the `alt+j`/`/pi-minions` picker now lists a nested row for every started step, not just the one currently running: completed steps get a ✓ prefix and failed steps a ✗ one, and selecting any of them opens the job's preview modal as before (prompt header plus a replay of `stdout.json`). A terminal job's preview now shows its finished marker instead of a spinner: the picker's open+replay fallback is factored into `openJobPreview(jobUI, id, meta)`, which calls `finishModalJob` for terminal job meta (mirroring the trail browser's detail view). Workflow widget rows, the workflow row itself, and the cancel-confirm path are unchanged.
+
 ## [0.2.3]
 
 - `help_pi_minion`'s `minions` list now surfaces each minion's `model` and `effort` (the file's frontmatter value, or `null` when it defines none), so the caller can see before calling that a missing field must be passed explicitly, picked by matching the task against `help_pi_minion`'s `modelRouting` table (responsibility → model family + effort). Both runtime errors now name that table too: a minion that defines no model says to classify the task against it, and one that defines no effort says to take the effort from the effort after the `/` in the matching routing row.

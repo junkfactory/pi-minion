@@ -1,7 +1,7 @@
 {
   "name": "pi-minion",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "pi": {
     "extensions": ["./extensions/index.ts"]
