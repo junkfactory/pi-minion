@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0]
+
+- Let claude minions use skills and the full tool surface
+- Document the release flow in README
+- Fix prev-tag parse in tag.sh
+- Port the pi-bridge.ext release flow with auto-changelog
+
+
 ## [0.2.4]
 
 - While a workflow is running, the `alt+j`/`/pi-minions` picker now lists a nested row for every started step, not just the one currently running: completed steps get a ✓ prefix and failed steps a ✗ one, and selecting any of them opens the job's preview modal as before (prompt header plus a replay of `stdout.json`). A terminal job's preview now shows its finished marker instead of a spinner: the picker's open+replay fallback is factored into `openJobPreview(jobUI, id, meta)`, which calls `finishModalJob` for terminal job meta (mirroring the trail browser's detail view). Workflow widget rows, the workflow row itself, and the cancel-confirm path are unchanged.

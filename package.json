@@ -1,10 +1,12 @@
 {
   "name": "pi-minion",
   "private": true,
-  "version": "0.2.4",
+  "version": "0.3.0",
   "type": "module",
   "pi": {
-    "extensions": ["./extensions/index.ts"]
+    "extensions": [
+      "./extensions/index.ts"
+    ]
   },
   "scripts": {
     "check": "tsc --noEmit",
