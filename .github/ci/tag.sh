@@ -40,7 +40,7 @@ npm test
 # v* tag, inserted as the version's section. Skipped when the section
 # already exists, so a hand-written section wins — write your prose first
 # and this becomes a no-op. The generated draft rides the release commit.
-PREV_TAG="$(jj tag list | awk '{print $1}' | grep '^v' | sort -V | tail -1 || true)"
+PREV_TAG="$(jj tag list | awk '{print $1}' | sed 's/:$//' | grep '^v' | sort -V | tail -1 || true)"
 BULLETS=""
 if [[ -f CHANGELOG.md ]] && grep -q "^## \[$VERSION\]" CHANGELOG.md; then
   echo "==> CHANGELOG already has a [$VERSION] section; leaving it alone"
