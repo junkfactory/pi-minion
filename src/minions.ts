@@ -5,27 +5,27 @@ import { parse } from "yaml";
 import { isValidMaxTurns } from "./config.js";
 import { logJobEvent, type JobLogEvent } from "./log.js";
 
-// One markdown file per agent, named `<agent-name>.md`. Scanned on every call
+// One markdown file per minion, named `<minion-name>.md`. Scanned on every call
 // (no cache): the directory is tiny, and an edit mid-session must take effect
-// on the next delegation.
-export const AGENT_DIR = join(homedir(), ".pi", "agent", "pi-minion", "agents");
+// on the next delegation. The legacy `agents/` directory is not read.
+export const MINION_DIR = join(homedir(), ".pi", "agent", "pi-minion", "minions");
 
 // Mirrors job-runner.ts's module-local MAX_TIMEOUT_MS (not exported there —
 // importing it would couple the loader to the runner): the same 32-bit
-// setTimeout ceiling bounds an agent file's default timeout.
-const MAX_AGENT_TIMEOUT_MS = 2_147_483_647;
+// setTimeout ceiling bounds a minion file's default timeout.
+const MAX_MINION_TIMEOUT_MS = 2_147_483_647;
 
-// Filename stem = agent name; kebab-case keeps names unambiguous wherever the
+// Filename stem = minion name; kebab-case keeps names unambiguous wherever the
 // name is echoed (tool params, job titles, logs).
 const KEBAB_CASE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-export interface AgentSummary {
+export interface MinionSummary {
   name: string;
   description: string;
 }
 
-// Parsed frontmatter plus the body, which is the agent's system prompt.
-export interface AgentDefinition extends AgentSummary {
+// Parsed frontmatter plus the body, which is the minion's system prompt.
+export interface MinionDefinition extends MinionSummary {
   model?: string;
   effort?: string;
   tools?: string[];
@@ -37,12 +37,12 @@ export interface AgentDefinition extends AgentSummary {
 
 // Same shape as logJobEvent, injected so tests needn't write the real log
 // (same rationale as workflow-runner's `log` dependency).
-export type AgentLog = (
+export type MinionLog = (
   event: JobLogEvent,
   info: { id: string; model: string; detail?: string }
 ) => void;
 
-export const defaultLog: AgentLog = (event, info) => void logJobEvent(event, info);
+export const defaultLog: MinionLog = (event, info) => void logJobEvent(event, info);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -90,12 +90,12 @@ function optionalNumber(
 // Validates one file and returns its definition (name excluded). Throws on
 // anything wrong; the caller logs and skips, so one bad file never hides the
 // rest of the directory.
-function parseAgentFile(raw: string): Omit<AgentDefinition, "name"> {
+function parseMinionFile(raw: string): Omit<MinionDefinition, "name"> {
   const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/.exec(raw);
   if (!match) throw new Error("missing YAML frontmatter");
   const [, frontmatterText, bodyText] = match;
   const body = (bodyText ?? "").trim();
-  if (!body) throw new Error("empty body (the body is the agent's system prompt)");
+  if (!body) throw new Error("empty body (the body is the minion's system prompt)");
 
   let data: unknown;
   try {
@@ -111,7 +111,7 @@ function parseAgentFile(raw: string): Omit<AgentDefinition, "name"> {
 
   const description = optionalString(frontmatter, "description");
   if (!description) throw new Error("missing required description");
-  // Optional keys beyond the schema are ignored: an agent file may carry
+  // Optional keys beyond the schema are ignored: a minion file may carry
   // notes for humans without failing validation.
   return {
     description,
@@ -133,35 +133,35 @@ function parseAgentFile(raw: string): Omit<AgentDefinition, "name"> {
     timeoutMs: optionalNumber(
       frontmatter,
       "timeoutMs",
-      (value) => value > 0 && value <= MAX_AGENT_TIMEOUT_MS,
-      `positive number no greater than ${MAX_AGENT_TIMEOUT_MS}`
+      (value) => value > 0 && value <= MAX_MINION_TIMEOUT_MS,
+      `positive number no greater than ${MAX_MINION_TIMEOUT_MS}`
     ),
     body
   };
 }
 
-function warn(log: AgentLog, file: string, reason: string): void {
+function warn(log: MinionLog, file: string, reason: string): void {
   // Not a job, so id is the file name and there is no model to report.
-  log("agent_invalid", { id: file, model: "n/a", detail: `reason="${reason}"` });
+  log("minion_invalid", { id: file, model: "n/a", detail: `reason="${reason}"` });
 }
 
-async function scanAgents(dir: string, log: AgentLog): Promise<AgentDefinition[]> {
+async function scanMinions(dir: string, log: MinionLog): Promise<MinionDefinition[]> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return []; // No agent directory yet is the normal "no agents" state.
+    return []; // No minion directory yet is the normal "no minions" state.
   }
-  const agents: AgentDefinition[] = [];
+  const minions: MinionDefinition[] = [];
   for (const entry of entries) {
     // Symlinks are read as files so a dotfile-repo setup still works;
-    // directories are never agent files. Anything else must be .md.
+    // directories are never minion files. Anything else must be .md.
     if (!(entry.isFile() || entry.isSymbolicLink())) continue;
     // Dotfiles (.DS_Store, editor swap backups, .gitkeep) are ordinary noise,
-    // not agent-file mistakes — skip them silently.
+    // not minion-file mistakes — skip them silently.
     if (entry.name.startsWith(".")) continue;
     if (!entry.name.endsWith(".md")) {
-      warn(log, entry.name, "not an agent file (.md)");
+      warn(log, entry.name, "not a minion file (.md)");
       continue;
     }
     const name = entry.name.slice(0, -".md".length);
@@ -170,36 +170,36 @@ async function scanAgents(dir: string, log: AgentLog): Promise<AgentDefinition[]
       continue;
     }
     try {
-      agents.push({ name, ...parseAgentFile(await readFile(join(dir, entry.name), "utf8")) });
+      minions.push({ name, ...parseMinionFile(await readFile(join(dir, entry.name), "utf8")) });
     } catch (error) {
       warn(log, entry.name, (error as Error).message);
     }
   }
-  // Sorted so help output and "available agents" lists are stable —
+  // Sorted so help output and "available minions" lists are stable —
   // readdir order is filesystem-dependent.
-  return agents.sort((a, b) => a.name.localeCompare(b.name));
+  return minions.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function listAgents(
-  dir: string = AGENT_DIR,
-  log: AgentLog = defaultLog
-): Promise<AgentSummary[]> {
-  return (await scanAgents(dir, log)).map(({ name, description }) => ({ name, description }));
+export async function listMinions(
+  dir: string = MINION_DIR,
+  log: MinionLog = defaultLog
+): Promise<MinionSummary[]> {
+  return (await scanMinions(dir, log)).map(({ name, description }) => ({ name, description }));
 }
 
-export async function resolveAgent(
+export async function resolveMinion(
   name: string,
-  dir: string = AGENT_DIR,
-  log: AgentLog = defaultLog
-): Promise<AgentDefinition> {
-  const agents = await scanAgents(dir, log);
-  const found = agents.find((agent) => agent.name === name);
+  dir: string = MINION_DIR,
+  log: MinionLog = defaultLog
+): Promise<MinionDefinition> {
+  const minions = await scanMinions(dir, log);
+  const found = minions.find((minion) => minion.name === name);
   if (found) return found;
-  const available = agents.map((agent) => agent.name);
+  const available = minions.map((minion) => minion.name);
   const listing = available.length
-    ? `Available agents: ${available.join(", ")}.`
-    : `No agent files are defined in ${dir}.`;
+    ? `Available minions: ${available.join(", ")}.`
+    : `No minion files are defined in ${dir}.`;
   throw new Error(
-    `Unknown agent "${name}". ${listing} Call help_pi_minion for the agents usable here.`
+    `Unknown minion "${name}". ${listing} Call help_pi_minion for the minions usable here.`
   );
 }

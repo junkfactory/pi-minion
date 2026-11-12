@@ -34,15 +34,15 @@ const MINION_OPERATIONAL_SENTENCES = [
 // if the minion waits for it before its turn ends — there's no later turn
 // for a "will report once it finishes" promise to be honored in.
 //
-// The identity line is the one sentence a named agent replaces: its body goes
-// first, then MINION_OPERATIONAL_TAIL (see applyAgentRequest in
+// The identity line is the one sentence a named minion replaces: its body goes
+// first, then MINION_OPERATIONAL_TAIL (see applyMinionRequest in
 // job-runner.ts).
 export const MINION_PROMPT_BASE = [
   "You are an independent pi minion completing the user's delegated task.",
   ...MINION_OPERATIONAL_SENTENCES
 ].join(" ");
 
-// Everything but the identity line, so a composed agent prompt and
+// Everything but the identity line, so a composed minion prompt and
 // MINION_PROMPT_BASE can never drift apart.
 export const MINION_OPERATIONAL_TAIL = MINION_OPERATIONAL_SENTENCES.join(" ");
 

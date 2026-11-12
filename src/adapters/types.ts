@@ -87,16 +87,16 @@ export type MinionRequest = {
   // (a schedule pins step ?? workflow ?? config at creation), so the runner
   // must NOT fall back to the then-current config.maxTurns.
   maxTurns?: number | null;
-  // Named specialized agent: a `<name>.md` in the pi-minion agent directory.
+  // Named specialized minion: a `<name>.md` in the pi-minion minion directory.
   // validateRequest() resolves it and fills the three fields below plus any
   // model/effort/limit defaults this request didn't name. Blank is treated as
   // absent. The name itself is kept for titles and metadata.
-  agent?: string;
-  // Set by validateRequest() for an agent request only: the agent body, then
+  minion?: string;
+  // Set by validateRequest() for a minion request only: the minion body, then
   // the shared operational tail (the generic identity line is replaced, not
   // appended). Absent = the adapter uses MINION_PROMPT_BASE unchanged.
   systemPrompt?: string;
-  // Set by validateRequest() for an agent request whose file declares `tools`:
+  // Set by validateRequest() for a minion request whose file declares `tools`:
   // that list narrowed to config.allowedTools. Absent = the adapter uses
   // config.allowedTools.
   allowedTools?: string[];
@@ -260,7 +260,7 @@ export interface AgentCliAdapter {
   // stopping the process by signal.
   capStopFrame?(): string;
   // A mid-run steering message as this CLI's own stdin frame. `steer` lands
-  // at the next turn boundary; `followUp` waits until the agent has no work
+  // at the next turn boundary; `followUp` waits until the minion has no work
   // left. Absent = this adapter has no steering channel and the caller must
   // reject the request rather than guess a frame.
   steerFrame?(message: string, deliverAs: "steer" | "followUp"): string;

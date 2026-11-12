@@ -14,7 +14,7 @@ import {
   jobDetailSpec,
   type JobUI,
   type ModalState
-} from "./agent.ui.js";
+} from "./minion.ui.js";
 import { backfillModal, resolveAdapterForJob } from "./modal.js";
 import { formatRelative } from "./format.js";
 import { glyph } from "./glyphs.js";

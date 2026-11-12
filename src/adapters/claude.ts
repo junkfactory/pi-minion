@@ -44,8 +44,8 @@ export function buildArgs(request: MinionRequest, config: MinionConfig): string[
   // stdin user-message frame (userMessageFrame below) instead of the trailing
   // positional prompt, which is what keeps the channel open for steering and
   // for the stdin close that lets the CLI exit.
-  // A named agent narrows config.allowedTools to request.allowedTools; absent
-  // (no agent), the config list is used unchanged.
+  // A named minion narrows config.allowedTools to request.allowedTools; absent
+  // (no minion), the config list is used unchanged.
   const allowedTools = request.allowedTools ?? config.allowedTools;
   return [
     "-p",
@@ -96,7 +96,7 @@ export function capStopFrame(): string {
 }
 
 // Steering reuses the SDK user-message frame: `steer` queues for the next turn
-// boundary, `followUp` is context that waits for the agent to finish
+// boundary, `followUp` is context that waits for the minion to finish
 // (shouldQuery false).
 export function steerFrame(message: string, deliverAs: "steer" | "followUp"): string {
   return userMessageFrame(message, deliverAs === "followUp" ? { shouldQuery: false } : {});

@@ -55,7 +55,7 @@ model vaguely, surface similar ids from that list for them to approve.
 ### Delegate a task
 
 **`run_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
-maxTurns?, agent?)`** — spawn a background job. The adapter that owns the requested
+maxTurns?, minion?)`** — spawn a background job. The adapter that owns the requested
 model runs it (`pi`, `claude`, `agy`, or `fm`, per the model registry), as a
 child process, and the call returns a job ID immediately, so your session
 keeps working while the minion runs. The result arrives later as a transcript
@@ -109,7 +109,7 @@ for a follow-up task.
 still-running job of this session. `deliverAs` defaults to `"steer"`, which
 lands after the current turn's tool calls and before the next model call,
 redirecting the run; `"followUp"` queues the message as context for after
-the agent has no work left. The job cannot ask back, so make `message`
+the minion has no work left. The job cannot ask back, so make `message`
 self-contained. Only running `pi` and `claude` jobs support steering — agy
 and fm have no steering channel — and a job that has already settled (or
 whose stdin channel has closed) rejects the message. The tool reports the
@@ -120,7 +120,7 @@ follow-up run instead of steering a finished job.
 ### Schedule jobs
 
 **`schedule_pi_minion(task, model, effort, context, maxBudgetUsd?, timeoutMs?,
-maxTurns?, agent?, cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
+maxTurns?, minion?, cron)`** — run the same request on a cron schedule (local time, 5 or 6 fields, via
 [croner](https://github.com/hexagon/croner)).
 
 - Each tick spawns an ordinary `run_pi_minion` job; its result posts to the
@@ -151,7 +151,7 @@ workflow schedule).
 
 **`run_pi_minion_workflow(title, context, maxBudgetUsd?, timeoutMs?,
 maxTurns?, steps)`** — run a small dependency graph of minion jobs: `steps: [{
-id, task, model, effort, dependsOn?, maxBudgetUsd?, timeoutMs?, maxTurns?, agent? }]`,
+id, task, model, effort, dependsOn?, maxBudgetUsd?, timeoutMs?, maxTurns?, minion? }]`,
 at most 10, up to 4 running at once. A step
 starts as soon as its `dependsOn` steps are done and receives their results.
 
@@ -164,9 +164,9 @@ starts as soon as its `dependsOn` steps are done and receives their results.
 - Before anything spawns, a confirm dialog lists the steps grouped into
   stages with their models, efforts, waits, and the total budget. It starts
   on "No"; declining runs nothing, and a session without a UI refuses.
-- The budget cap sums only steps whose agent enforces `maxBudgetUsd`; steps
+- The budget cap sums only steps whose adapter enforces `maxBudgetUsd`; steps
   on pi, agy, or fm are marked "no cost ceiling" and counted separately.
-  A step whose model comes from an agent default is optimistically counted as
+  A step whose model comes from a minion default is optimistically counted as
   enforcing at dialog time — the real adapter, and thus the marking, is only
   known once the step starts.
 - `maxTurns` resolves per step, then the workflow-level value, then the config
@@ -189,7 +189,7 @@ starts as soon as its `dependsOn` steps are done and receives their results.
   first line becomes the summary's TLDR) and keep detail after it; terminal
   steps keep the standing concise prompt.
 
-Either the agent proposes a workflow in chat first, or you ask for one ("use
+Either the calling agent proposes a workflow in chat first, or you ask for one ("use
 a workflow ..."). Workflows live in memory only and stop when their session
 quits.
 
@@ -226,15 +226,22 @@ from 1 to 100000, unlimited when all are absent).
   marks scheduled-workflow rows `⏱⇉`, and `cancel_pi_minion_schedule` stops future ticks.
   A session without a UI refuses.
 
-### Specialized agents
+### Specialized minions
 
-A specialized agent is one markdown file under
-`~/.pi/agent/pi-minion/agents/` (per user, not per project). The filename stem
-is the name (`code-review.md` → `agent: "code-review"`), so it must be
+A specialized minion is one markdown file under
+`~/.pi/agent/pi-minion/minions/` (per user, not per project). The filename stem
+is the name (`code-review.md` → `minion: "code-review"`), so it must be
 kebab-case; only `.md` files are read. The body is the minion's system prompt,
 and the shared operational tail (untrusted-data rule, orchestrator output
 budget, headless note) is still appended — it replaces the generic "independent
 pi minion" identity line rather than adding to it.
+
+The file format is unchanged from earlier releases; only the directory moved.
+`~/.pi/agent/pi-minion/agents/` is **no longer read** — there is no fallback and
+no automatic migration, so move any definitions into `minions/` yourself
+(`mkdir -p ~/.pi/agent/pi-minion/minions && mv ~/.pi/agent/pi-minion/agents/*.md ~/.pi/agent/pi-minion/minions/`) before
+the next run. A definition left in `agents/` is simply invisible: it is not
+listed, not validated, and naming it fails as an unknown minion.
 
 ```markdown
 ---
@@ -252,7 +259,7 @@ You are a code review specialist. Report real bugs, not style nits.
 
 | Frontmatter    | Required | Type / range                         | Meaning                                                                                                    |
 |:---------------|:---------|:-------------------------------------|:-----------------------------------------------------------------------------------------------------------|
-| `description`  | yes      | non-empty string                     | One line shown in `help_pi_minion`'s `agents` list                                                         |
+| `description`  | yes      | non-empty string                     | One line shown in `help_pi_minion`'s `minions` list                                                        |
 | `model`        | no       | non-empty string                     | Default model: a family alias or concrete CLI id, passed verbatim to the CLI (each CLI resolves its own).  |
 | `effort`       | no       | non-empty string                     | Default effort, same levels as the `effort` tool param.                                                    |
 | `tools`        | no       | string array or comma-separated text | Narrows `config.allowedTools` (see below).                                                                 |
@@ -262,39 +269,41 @@ You are a code review specialist. Report real bugs, not style nits.
 
 Keys beyond this table are ignored. An invalid file — bad YAML, missing or
 blank `description`, empty body, wrong type, or a non-kebab-case filename — is
-skipped with an `agent_invalid` lifecycle-log line, so one broken file never
+skipped with a `minion_invalid` lifecycle-log line, so one broken file never
 hides the rest. The directory is rescanned on every request (no cache): an
 edit applies to the next run you start, and to an existing schedule's next
-tick — a schedule with `agent` replays the raw pre-merge request, so
+tick — a schedule with `minion` replays the raw pre-merge request, so
 frontmatter `model`/`effort`/limit edits reach the next tick (values you
-passed explicitly stay pinned). For agent schedules, the config defaults for
+passed explicitly stay pinned). For minion schedules, the config defaults for
 `timeoutMs`/`maxTurns` are also re-read each tick (frontmatter beats config;
-explicit values stay pinned). Deleting the agent file makes the next tick
+explicit values stay pinned). Deleting the minion file makes the next tick
 fail to start with an instructive error.
 
-- Pass `agent` on `run_pi_minion`, `schedule_pi_minion`, or a workflow step.
-  With an agent, `model`/`effort` may be omitted when the file supplies them.
-  `help_pi_minion` lists available agents as `agents: [{name, description}]`;
-  unknown names fail with the available names attached.
+- Pass `minion` on `run_pi_minion`, `schedule_pi_minion`, or a workflow step.
+  With a minion, `model`/`effort` may be omitted when the file supplies them.
+  `help_pi_minion` lists the available minions as
+  `minions: [{name, description}]`; `list_pi_minions` and
+  `list_pi_minion_schedules` report each row's captured minion under the
+  `minion` field; unknown names fail with the available names attached.
 - Precedence per field: explicit call param > frontmatter > `pi-minion.json`
-  default. `model`/`effort` have no config default, so an agent that defines
+  default. `model`/`effort` have no config default, so a minion that defines
   neither and a call that passes neither is rejected with an error naming the
-  agent and pointing at `help_pi_minion`'s models.
-- `tools` can only narrow: the effective list is the agent's entries
+  minion and pointing at `help_pi_minion`'s models.
+- `tools` can only narrow: the effective list is the minion's entries
   intersected with `config.allowedTools` (minimatch globs). An empty
   intersection is rejected — never silently widened, since for claude an empty
   `--allowedTools` means unrestricted. Without frontmatter `tools`,
   `config.allowedTools` applies unchanged; with an empty `config.allowedTools`
-  (no allowlist), the agent's list is used as written. Only the claude adapter
+  (no allowlist), the minion's list is used as written. Only the claude adapter
   consumes this list: on any other adapter `tools` is ignored (logged as
-  `agent_tools_ignored`), and `tools: []` is only an error for claude.
+  `minion_tools_ignored`), and `tools: []` is only an error for claude.
 - The merged model still passes the provider/model allowlists and the cost
-  gate; an agent cannot launder a gated model past them.
-- A job started with an agent is titled and recorded `<agent>: <title>`
-  (instead of the model), sub-sessions are named `<agent>: <name>`, schedule
-  picker rows prefix `<agent> agent ·`, and a workflow step names its agent
-  (`agent <name>`) in the confirm dialog, and in the plan/picker rows when no
-  model is set. Agent files are never modified by pi-minion.
+  gate; a minion cannot launder a gated model past them.
+- A job started with a minion is titled and recorded `<minion>: <title>`
+  (instead of the model), sub-sessions are named `<minion>: <name>`, schedule
+  picker rows prefix `<minion> minion ·`, and a workflow step names its minion
+  (`minion <name>`) in the confirm dialog, and in the plan/picker rows when no
+  model is set. Minion files are never modified by pi-minion.
 
 ### In the UI
 
@@ -303,7 +312,7 @@ fail to start with an instructive error.
 runs started by a schedule), then a scrollable detail modal with the job's
 full streamed output. This session's schedules are listed after them as
 `⏱ <title> · <model> / <effort> · <cron> · next <time>` (prefixed with
-`<agent> agent ·` when the schedule names an agent); picking one asks to stop
+`<minion> minion ·` when the schedule names a minion); picking one asks to stop
 it. Running workflows are listed first as
 `⇉ <title> · <done>/<total> steps · <running step ids>`; picking one asks to
 cancel it.
@@ -405,7 +414,7 @@ You can then prompt pi like
 - Run a pi minion to explore this code base and summarize it
 - Run a sonnet pi minion to debug this ticket
 - Run an opus pi minion to review current changes at medium effort; budget $5; timeout 10 minutes
-- Use a workflow: two sonnet agents review the current changes for bugs and performance, then an opencode-go/gpt-6-luna agent verifies their findings
+- Use a workflow: two sonnet minions review the current changes for bugs and performance, then an opencode-go/gpt-6-luna minion verifies their findings
 
 ## Configuration
 
@@ -453,7 +462,7 @@ which re-exports `src/pi-minion.ts`; there is no compiled artifact).
    `output-capture.ts` (stdout/stderr capture), `job-store.ts` (in-memory job
    state), `tools.ts` (tool registration), `config.ts`, `format.ts`, `log.ts`,
    `child-session.ts`, `modal.ts` (detail-view event replay), `pi-minion.ts`
-   (extension wiring only) — or `agent.ui.ts` (widget, picker, modal — no
+   (extension wiring only) — or `minion.ui.ts` (widget, picker, modal — no
    domain logic).
 2. Extract new decision/formatting logic into a small exported pure
    function and unit test it directly, rather than testing through the

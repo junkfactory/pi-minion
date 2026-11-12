@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatTokenUsage } from "./agent.ui.js";
+import { formatTokenUsage } from "./minion.ui.js";
 import type { ModelBreakdown, TokenCounts, UsageTotals } from "./adapters/types.js";
 import { truncate } from "./adapters/util.js";
 
@@ -169,6 +169,7 @@ export function formatTokenModelBreakdown(
 export function formatJobFrontmatter(
   params: UsageFields & {
     jobId: string;
+    // Adapter-CLI identity ("claude"/"pi"/…), not a minion name — the report header names the CLI that ran the job, so the key intentionally stays `agent`.
     agent: string;
     model: string;
     effort?: string;

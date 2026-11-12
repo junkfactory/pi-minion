@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { MinionRequest } from "./adapters/types.js";
-import type { JobUI, StepRunStats } from "./agent.ui.js";
+import type { JobUI, StepRunStats } from "./minion.ui.js";
 import type { WorkflowSession } from "./child-session.js";
 import {
   clearJobViews,
@@ -293,13 +293,13 @@ function startStep(id: string, wf: MinionWorkflow, step: WorkflowStep, deps: Wor
     workspace: wf.cwd,
     model: step.model,
     effort: step.effort,
-    agent: step.agent,
+    minion: step.minion,
     context: wf.context,
     maxBudgetUsd: step.maxBudgetUsd ?? wf.maxBudgetUsd,
     timeoutMs: step.timeoutMs ?? wf.timeoutMs,
     // The null "no cap" sentinel is a value, not an absence: `??` would drop
     // it (null ?? undefined → undefined) and let a later config edit retarget
-    // a pinned non-agent step in a mixed agent/non-agent definition.
+    // a pinned non-minion step in a mixed minion/non-minion definition.
     maxTurns: step.maxTurns !== undefined ? step.maxTurns : wf.maxTurns
   };
   const isCancelled = () => step.status !== "running";

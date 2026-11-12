@@ -78,7 +78,7 @@ export function createFakeAdapter(config: MinionConfig): AgentCliAdapter {
 }
 
 // Minimal stand-ins for Pi's real Theme/TUI/ExtensionContext — only the
-// surface agent.ui.ts actually touches. Kept intentionally dumb (fg/bold are
+// surface minion.ui.ts actually touches. Kept intentionally dumb (fg/bold are
 // no-ops) so assertions read the plain text a real theme would only color.
 export function fakeTheme() {
   return {

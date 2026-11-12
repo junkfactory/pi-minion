@@ -2,9 +2,9 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { JobUI, StepRunStats } from "./agent.ui.js";
+import type { JobUI, StepRunStats } from "./minion.ui.js";
 import { minimatch } from "minimatch";
-import { AGENT_DIR, defaultLog, resolveAgent, type AgentLog } from "./agents.js";
+import { MINION_DIR, defaultLog, resolveMinion, type MinionLog } from "./minions.js";
 import type {
   AdapterParseState,
   AgentCliAdapter,
@@ -86,7 +86,7 @@ export function resolveMaxTurns(
   return request.maxTurns ?? config.maxTurns;
 }
 
-// Tools may only ever be narrowed: an agent file's `tools` list is
+// Tools may only ever be narrowed: a minion file's `tools` list is
 // intersected with config.allowedTools (Claude tool names/globs, e.g.
 // "mcp__*"). Only claude consumes request.allowedTools (pi auto-approves and
 // ignores it, agy skips permissions, fm has no tools), so validateRequest
@@ -95,17 +95,17 @@ export function resolveMaxTurns(
 // error — claude receives no --allowedTools at all for an empty list, which
 // means unrestricted, so returning [] would silently widen the surface instead
 // of narrowing it. A config allowlist of [] pins nothing (empty = no
-// allowlist, same convention as models.allowed), so the agent's own list is
+// allowlist, same convention as models.allowed), so the minion's own list is
 // already the narrowing.
 function narrowAllowedTools(
-  agentName: string,
+  minionName: string,
   tools: string[] | undefined,
   allowedTools: string[]
 ): string[] | undefined {
   if (tools === undefined) return undefined; // No frontmatter tools: inherit config.allowedTools.
   if (tools.length === 0)
     throw new Error(
-      `agent '${agentName}' lists no tools — for claude an empty list means unrestricted, not a restriction. Omit \`tools\` to inherit config.allowedTools.`
+      `minion '${minionName}' lists no tools — for claude an empty list means unrestricted, not a restriction. Omit \`tools\` to inherit config.allowedTools.`
     );
   if (allowedTools.length === 0) return tools;
   const permitted = tools.filter((tool) =>
@@ -113,47 +113,47 @@ function narrowAllowedTools(
   );
   if (permitted.length === 0)
     throw new Error(
-      `agent '${agentName}' allows only ${tools.join(", ")}, none of which config.allowedTools permits (${allowedTools.join(", ")}). Add a matching tool to config.allowedTools, or drop \`tools\` from the agent file.`
+      `minion '${minionName}' allows only ${tools.join(", ")}, none of which config.allowedTools permits (${allowedTools.join(", ")}). Add a matching tool to config.allowedTools, or drop \`tools\` from the minion file.`
     );
   return permitted;
 }
 
-// Per-field precedence applied by applyAgentRequest/validateRequest: explicit
-// request value > agent frontmatter > config default. Config defaults aren't
-// merged here — the runner applies them unchanged, so an agent's
+// Per-field precedence applied by applyMinionRequest/validateRequest: explicit
+// request value > minion frontmatter > config default. Config defaults aren't
+// merged here — the runner applies them unchanged, so a minion's
 // model/effort/limits only fill a gap the request and config both leave open,
-// and an agent can never outrank the request. applyAgentRequest's result: the
+// and a minion can never outrank the request. applyMinionRequest's result: the
 // merged request plus what validateRequest needs to narrow tools AFTER the
 // model gates (so a gated model's error is never misordered behind a tools
 // error).
-type AgentMerge = {
+type MinionMerge = {
   merged: MinionRequest;
-  agentName: string;
-  agentTools: string[] | undefined;
+  minionName: string;
+  minionTools: string[] | undefined;
   narrow: boolean;
 };
 
-async function applyAgentRequest(
+async function applyMinionRequest(
   request: MinionRequest,
-  agentDir: string,
-  log: AgentLog
-): Promise<AgentMerge> {
-  const name = (request.agent ?? "").trim();
-  // Unknown agent: resolveAgent throws with the available names, the same
+  minionDir: string,
+  log: MinionLog
+): Promise<MinionMerge> {
+  const name = (request.minion ?? "").trim();
+  // Unknown minion: resolveMinion throws with the available names, the same
   // contract as an unknown model.
-  const agent = await resolveAgent(name, agentDir, log);
+  const minion = await resolveMinion(name, minionDir, log);
   // Post-merge model/effort must be non-empty, and the error has to name the
-  // agent: the generic "effort is required" hint would leave the caller
+  // minion: the generic "effort is required" hint would leave the caller
   // looking in the wrong place.
-  const model = request.model?.trim() || agent.model;
+  const model = request.model?.trim() || minion.model;
   if (!model)
     throw new Error(
-      `agent '${name}' defines no model — pass \`model\` explicitly. Call help_pi_minion for the models usable here.`
+      `minion '${name}' defines no model — pass \`model\` explicitly. Call help_pi_minion for the models usable here.`
     );
-  const effort = request.effort?.trim() || agent.effort;
+  const effort = request.effort?.trim() || minion.effort;
   if (!effort)
     throw new Error(
-      `agent '${name}' defines no effort — pass \`effort\` explicitly: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
+      `minion '${name}' defines no effort — pass \`effort\` explicitly: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
     );
   // Only claude narrows: the other adapters never read request.allowedTools,
   // so narrowing for them would claim a restriction the run does not have.
@@ -167,27 +167,27 @@ async function applyAgentRequest(
   } catch {
     adapter = undefined;
   }
-  if (adapter && adapter.command !== "claude" && agent.tools !== undefined) {
-    // Out of job: the agent name is the id, like agent_invalid.
-    log("agent_tools_ignored", {
+  if (adapter && adapter.command !== "claude" && minion.tools !== undefined) {
+    // Out of job: the minion name is the id, like minion_invalid.
+    log("minion_tools_ignored", {
       id: name,
       model,
-      detail: `agent=${name} adapter=${adapter.command} reason="tools narrows claude only"`
+      detail: `minion=${name} adapter=${adapter.command} reason="tools narrows claude only"`
     });
   }
   return {
     merged: {
       ...request,
-      agent: name,
+      minion: name,
       model,
       effort,
-      maxTurns: request.maxTurns !== undefined ? request.maxTurns : agent.maxTurns,
-      maxBudgetUsd: request.maxBudgetUsd ?? agent.maxBudgetUsd,
-      timeoutMs: request.timeoutMs ?? agent.timeoutMs,
-      systemPrompt: `${agent.body}\n\n${MINION_OPERATIONAL_TAIL}`
+      maxTurns: request.maxTurns !== undefined ? request.maxTurns : minion.maxTurns,
+      maxBudgetUsd: request.maxBudgetUsd ?? minion.maxBudgetUsd,
+      timeoutMs: request.timeoutMs ?? minion.timeoutMs,
+      systemPrompt: `${minion.body}\n\n${MINION_OPERATIONAL_TAIL}`
     },
-    agentName: name,
-    agentTools: agent.tools,
+    minionName: name,
+    minionTools: minion.tools,
     // Unresolved model: narrow (conservative — it may run on claude); a known
     // non-claude adapter never consumes allowedTools, so it never narrows.
     narrow: adapter === undefined || adapter.command === "claude"
@@ -199,10 +199,10 @@ export async function validateRequest(
   cwd: string,
   config: MinionConfig,
   // Test seam, the same positional-override pattern as loadConfig: production
-  // callers omit it and get the user's real agent directory.
-  agentDir: string = AGENT_DIR,
+  // callers omit it and get the user's real minion directory.
+  minionDir: string = MINION_DIR,
   // Same seam for the lifecycle log, so tests never write the real one.
-  log: AgentLog = defaultLog
+  log: MinionLog = defaultLog
 ): Promise<MinionRequest> {
   await ensureRegistry(config);
   const workspace = resolve(request.workspace);
@@ -211,34 +211,34 @@ export async function validateRequest(
   }
   if (!(await stat(workspace)).isDirectory())
     throw new Error("workspace is not a directory");
-  // Blank agent = absent, consistent with task's trim check. The applied
+  // Blank minion = absent, consistent with task's trim check. The applied
   // request drops a blank name so downstream titles/metadata never see one.
-  const agentName = request.agent?.trim();
-  // One agent application per run: a request that already carries a
+  const minionName = request.minion?.trim();
+  // One minion application per run: a request that already carries a
   // systemPrompt has been merged (run_pi_minion validates and passes the
-  // merged request on), so a second applyAgentRequest would only duplicate
-  // its side effects (agent_tools_ignored). Raw requests — schedule ticks,
+  // merged request on), so a second applyMinionRequest would only duplicate
+  // its side effects (minion_tools_ignored). Raw requests — schedule ticks,
   // workflow steps — never carry one, so they still merge fresh, which keeps
-  // the documented deleted-agent-file tick failure. Every check below runs on
+  // the documented deleted-minion-file tick failure. Every check below runs on
   // whatever `effective` is either way.
   const alreadyMerged = request.systemPrompt !== undefined;
   let effective: MinionRequest;
-  let merge: AgentMerge | undefined;
-  if (agentName === undefined) effective = request;
-  else if (!agentName)
+  let merge: MinionMerge | undefined;
+  if (minionName === undefined) effective = request;
+  else if (!minionName)
     // Blank name: dropped, as before.
-    effective = { ...request, agent: undefined };
+    effective = { ...request, minion: undefined };
   else if (alreadyMerged) effective = request;
   else {
-    merge = await applyAgentRequest(request, agentDir, log);
+    merge = await applyMinionRequest(request, minionDir, log);
     effective = merge.merged;
   }
   const model = effective.model;
-  // A request with no agent must carry its own model; the old schema error is
+  // A request with no minion must carry its own model; the old schema error is
   // gone now that model is optional at the tool boundary.
-  if (!effective.agent && !model.trim())
+  if (!effective.minion && !model.trim())
     throw new Error(
-      "model is required unless `agent` supplies one — call help_pi_minion for the models usable here."
+      "model is required unless `minion` supplies one — call help_pi_minion for the models usable here."
     );
   const modelProviders = providersOfModel(model);
   if (modelProviders.length > 0 && !modelProviders.every((p) => isProviderAllowed(config, p))) {
@@ -254,13 +254,13 @@ export async function validateRequest(
     );
   // Tools narrowing runs after the model gates: a gated model's error wins
   // over a tools error, and the gates check the merged model either way. A
-  // known non-claude adapter logged agent_tools_ignored at merge time and
+  // known non-claude adapter logged minion_tools_ignored at merge time and
   // never narrows (narrow is false), so nothing here can widen claude's
   // surface: an empty intersection still hard-rejects.
-  if (merge?.agentTools !== undefined && merge.narrow)
+  if (merge?.minionTools !== undefined && merge.narrow)
     effective = {
       ...effective,
-      allowedTools: narrowAllowedTools(merge.agentName, merge.agentTools, config.allowedTools)
+      allowedTools: narrowAllowedTools(merge.minionName, merge.minionTools, config.allowedTools)
     };
   if (
     effective.maxBudgetUsd !== undefined &&
@@ -288,7 +288,7 @@ export async function validateRequest(
     );
   }
   // The adapter check runs on the EFFECTIVE cap, not just the request's own:
-  // a config.maxTurns default (or an agent file's default) reaches the runner
+  // a config.maxTurns default (or a minion file's default) reaches the runner
   // the same way, so a request that names none but inherits one must be
   // rejected here too.
   if (resolveMaxTurns(effective, config) !== undefined) {
@@ -352,16 +352,16 @@ export async function startJob(
   // the step was cancelled while this job was still starting, so nothing is
   // spawned (no paid process) and the promise rejects.
   isCancelled?: () => boolean,
-  // Test seams for validateRequest's agent resolution, the same rationale as
+  // Test seams for validateRequest's minion resolution, the same rationale as
   // validateRequest's own positional overrides: tests never touch the user's
-  // real agent dir or lifecycle log.
-  agentDir: string = AGENT_DIR,
-  log: AgentLog = defaultLog
+  // real minion dir or lifecycle log.
+  minionDir: string = MINION_DIR,
+  log: MinionLog = defaultLog
 ): Promise<string> {
   const config = await loadConfig();
   pruneJobMeta(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
   pruneWorkflows(config.pruneAfterDays ?? DEFAULT_PRUNE_AFTER_DAYS);
-  const validRequest = await validateRequest(request, cwd, config, agentDir, log);
+  const validRequest = await validateRequest(request, cwd, config, minionDir, log);
   // help_pi_minion awaits every adapter's catalog refresh before listing
   // models; a run must not declare a model unknown against a catalog that
   // session_start's fire-and-forget refresh hasn't populated yet. The refresh
@@ -377,17 +377,17 @@ export async function startJob(
   const parseState: AdapterParseState = {};
   const warnings = adapter.describeUnsupported(validRequest, config);
   const id = randomUUID();
-  // An agent-named job leads its display title with the agent, so the
+  // A minion-named job leads its display title with the minion, so the
   // picker, modal and list rows read "reviewer: …" instead of a model prefix.
   const baseTitle = workflowStep?.title ?? deriveJobTitle(request.task);
-  const title = validRequest.agent ? `${validRequest.agent}: ${baseTitle}` : baseTitle;
+  const title = validRequest.minion ? `${validRequest.minion}: ${baseTitle}` : baseTitle;
   jobMeta.set(id, {
     title,
-    // The merged values, not the raw request's: an agent job started with
+    // The merged values, not the raw request's: a minion job started with
     // "" model/effort must record what it actually runs.
     model: validRequest.model,
     effort: validRequest.effort,
-    agent: validRequest.agent,
+    minion: validRequest.minion,
     prompt: resolveTaskText(request),
     workspace: validRequest.workspace,
     // Resolved now, not taken as-is: a session replaced while this job was
@@ -875,7 +875,7 @@ export async function startJob(
         writeChildSession({
           parentSessionFile,
           cwd,
-          agent: validRequest.agent,
+          minion: validRequest.minion,
           name: workflowStep?.id ?? deriveJobTitle(request.task),
           prompt: resolveTaskText(request),
           resultText: finalResult ?? result,

@@ -33,7 +33,7 @@ export type MinionJob = {
 
 export type JobMetaStatus = "running" | "done" | "errored" | "cancelled";
 
-// Title/model outlive a job's entry in agent.ui.ts's live registry (which
+// Title/model outlive a job's entry in minion.ui.ts's live registry (which
 // drops a job the instant it finishes) but the detail modal can still be
 // open for a finished job, so its header needs a title/model source that
 // survives completion. Small and session-scoped; pruned by pruneJobMeta.
@@ -44,9 +44,9 @@ export type JobMetaEntry = {
   // prefer it over `model`, which stays the requested alias for adapter lookup.
   resolvedModel?: string;
   effort?: string;
-  // The named specialized agent this job ran as, when one was requested;
+  // The named specialized minion this job ran as, when one was requested;
   // display titles lead with it instead of the model.
-  agent?: string;
+  minion?: string;
   prompt: string;
   workspace: string;
   sessionId: string;
@@ -54,7 +54,7 @@ export type JobMetaEntry = {
   finishedAt?: number;
   reportPath?: string;
   // Final turn counts, frozen when the job finished so the trail browser can
-  // show them after the live registry (agent.ui.ts) has dropped the job.
+  // show them after the live registry (minion.ui.ts) has dropped the job.
   turnsSeen?: number;
   maxTurns?: number;
   // Set when this job is a workflow step (the owning workflow's map key);

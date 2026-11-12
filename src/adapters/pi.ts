@@ -176,7 +176,7 @@ export function steerFrame(message: string): string {
   return `${JSON.stringify({ type: "steer", message })}\n`;
 }
 
-// Delivered only once the agent has no more work to do.
+// Delivered only once the minion has no more work to do.
 export function followUpFrame(message: string): string {
   return `${JSON.stringify({ type: "follow_up", message })}\n`;
 }
@@ -392,7 +392,7 @@ export function describeUnsupported(_request: MinionRequest, _config: MinionConf
 
 // The actionable half of describeUnsupported: what the calling agent has to
 // do about it. The facts above read as a footnote ("no cost ceiling"), which
-// an agent skims past as a $5 stop; the policy lines say what to do instead.
+// the calling agent skims past as a $5 stop; the policy lines say what to do instead.
 export function describePolicy(_request: MinionRequest, _config: MinionConfig): string[] {
   return [
     "This adapter enforces no cost ceiling — the budget_usd field is advisory only. Cap the run with maxTurns instead: the job is cancelled as soon as the turn cap is reached. And with a cheap model and low effort, each turn costs little.",

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { JobUI } from "./agent.ui.js";
+import type { JobUI } from "./minion.ui.js";
 import type { AgentCliAdapter, NormalizedEvent } from "./adapters/types.js";
 import { getAdapter, listAdapterNames, resolveAdapterForModel } from "./adapters/registry.js";
 import { getJobUI, JOB_ROOT, jobMeta } from "./job-store.js";

@@ -64,10 +64,10 @@ describe("writeChildSession", () => {
     }
   });
 
-  it("names the session after the agent when one is set", async () => {
+  it("names the session after the minion when one is set", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-child-"));
     try {
-      const file = writeChildSession({ ...base, agent: "reviewer", usageRoot: dir });
+      const file = writeChildSession({ ...base, minion: "reviewer", usageRoot: dir });
       const entries = await readEntries(file!);
       assert.equal(entries.find((e) => e.type === "session_info").name, "reviewer: Review the diff");
     } finally {

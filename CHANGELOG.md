@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2]
+
+- Rename pi-minion's specialized-definition terminology from "agent" to "minion" throughout. Definition files now live in `~/.pi/agent/pi-minion/minions/`; the old `~/.pi/agent/pi-minion/agents/` directory is no longer read — there is no fallback and no automatic migration, so move definitions by hand. The file format (frontmatter keys, body-as-system-prompt) is unchanged.
+- Interface renames (no compatibility aliases): `help_pi_minion` returns the list under `minions` instead of `agents`; `list_pi_minions` and `list_pi_minion_schedules` rows expose `minion` instead of `agent`; lifecycle-log events `agent_invalid`/`agent_tools_ignored` become `minion_invalid`/`minion_tools_ignored`; job titles, sub-session names, schedule picker prefixes, and workflow confirm labels say `minion`. Adapter identities and Pi host terminology are unchanged. Historical `pi-minion.log` lines keep the old `agent_invalid`/`agent_tools_ignored` tokens; only new lines use the renamed events.
+
 ## [0.2.1]
 
 - Rename the public `agent` parameter to `minion` for `run_pi_minion`, `schedule_pi_minion`, and workflow steps. Existing agent files and internal agent handling are unchanged.

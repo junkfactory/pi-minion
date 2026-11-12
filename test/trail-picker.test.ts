@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
-import { createJobUI } from "../src/agent.ui.js";
+import { createJobUI } from "../src/minion.ui.js";
 import { openPiMinionsPicker } from "../src/modal.js";
 import { jobMeta } from "../src/job-store.js";
 import type { JobMetaEntry } from "../src/job-types.js";

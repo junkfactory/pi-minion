@@ -26,7 +26,7 @@ export type JobSchedule = ScheduleBase & {
   kind?: "job";
   // Already validated, with workspace filled in from ctx.cwd.
   request: MinionRequest;
-  // Agent schedules only: the caller's raw pre-merge request. Ticks replay
+  // Minion schedules only: the caller's raw pre-merge request. Ticks replay
   // this instead of `request` so frontmatter model/effort/limit edits take
   // effect on the next tick; the merged `request` stays for display and logs.
   rawRequest?: MinionRequest;
@@ -118,7 +118,7 @@ export function scheduleResolvedModel(
 // schedule's latest run, when there has been one; until then the alias shows.
 export type ScheduleLabelInput = Pick<ScheduleBase, "title" | "cron" | "effort"> &
   (
-    | { kind?: "job"; request: Pick<MinionRequest, "model" | "agent"> }
+    | { kind?: "job"; request: Pick<MinionRequest, "model" | "minion"> }
     | { kind: "workflow"; def: { steps: readonly unknown[] } }
   );
 
@@ -132,10 +132,10 @@ export function formatScheduleLabel(
     return `${glyph("⏱⇉ ")}${schedule.title} · ${schedule.def.steps.length} steps · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
   }
   const model = resolvedModel ?? schedule.request.model;
-  // The agent names the schedule's prompt/tool surface as well as its model
-  // default; the model itself stays visible (it may be the agent's default).
-  const agent = schedule.request.agent ? `${schedule.request.agent} agent · ` : "";
-  return `${glyph("⏱ ")}${schedule.title} · ${agent}${model}${schedule.effort ? ` / ${schedule.effort}` : ""} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
+  // The minion names the schedule's prompt/tool surface as well as its model
+  // default; the model itself stays visible (it may be the minion's default).
+  const minionLabel = schedule.request.minion ? `${schedule.request.minion} minion · ` : "";
+  return `${glyph("⏱ ")}${schedule.title} · ${minionLabel}${model}${schedule.effort ? ` / ${schedule.effort}` : ""} · ${schedule.cron} · next ${formatNextRun(nextRun, now)}`;
 }
 
 // Lets a scheduled minion end its own schedule ("monitor X until Y"): the

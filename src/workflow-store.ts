@@ -8,8 +8,8 @@ import type {
   WorkflowConfirm,
   WorkflowStepStatus,
   WorkflowWidgetStatus
-} from "./agent.ui.js";
-import { formatTokenUsage } from "./agent.ui.js";
+} from "./minion.ui.js";
+import { formatTokenUsage } from "./minion.ui.js";
 import { deriveJobTitle, formatCostUsd, formatDurationMs, truncateResultForContext } from "./format.js";
 import { glyph } from "./glyphs.js";
 import type { WorkflowSession } from "./child-session.js";
@@ -29,13 +29,13 @@ export type WorkflowStepDef = {
   id: string;
   // May contain {{steps.<id>.result}}; each referenced id must be in dependsOn.
   task: string;
-  // "" defers to `agent`'s frontmatter default (see tools.ts's
-  // withAgentDefaults): validateRequest merges it before the step spawns.
+  // "" defers to `minion`'s frontmatter default (see tools.ts's
+  // withMinionDefaults): validateRequest merges it before the step spawns.
   model: string;
   effort: string;
-  // Named specialized agent: supplies the step's prompt and any model/effort/
+  // Named specialized minion: supplies the step's prompt and any model/effort/
   // limits this step omits. Persisted with the step so ticks replay it.
-  agent?: string;
+  minion?: string;
   dependsOn?: string[];
   maxBudgetUsd?: number;
   timeoutMs?: number;
@@ -245,7 +245,7 @@ function stepTimeout(
 
 // step ?? workflow ?? config, like the budget and the timeout: a scheduled run
 // pins the config default too, so a later config edit cannot retarget a
-// non-agent step (agent steps leave config-only limits undefined — see
+// non-minion step (minion steps leave config-only limits undefined — see
 // withEffectiveLimits). The resolved value is validated here (same bounds the
 // runner enforces on a request) rather than left for a tick to reject at spawn.
 function stepMaxTurns(
@@ -288,24 +288,24 @@ export function modelEnforcesBudget(model: string): boolean {
   }
 }
 
-// An agent step whose budget is not named by the step or the workflow gets it
-// from the agent file (frontmatter), re-read each tick — the config default is
+// A minion step whose budget is not named by the step or the workflow gets it
+// from the minion file (frontmatter), re-read each tick — the config default is
 // not its cap, so the confirm dialog's numeric sum excludes such steps.
-function isAgentDefaultBudget(
-  step: Pick<WorkflowStepDef, "agent" | "maxBudgetUsd">,
+function isMinionDefaultBudget(
+  step: Pick<WorkflowStepDef, "minion" | "maxBudgetUsd">,
   def: Pick<WorkflowDef, "maxBudgetUsd">
 ): boolean {
-  return isAgentStep(step) && step.maxBudgetUsd === undefined && def.maxBudgetUsd === undefined;
+  return isMinionStep(step) && step.maxBudgetUsd === undefined && def.maxBudgetUsd === undefined;
 }
 
-// Count of agent steps whose budget comes from the agent file, for the confirm
-// dialog's "agent-default" note. Enforcing steps only — steps whose adapter
+// Count of minion steps whose budget comes from the minion file, for the confirm
+// dialog's "minion-default" note. Enforcing steps only — steps whose adapter
 // ignores the cap are already counted by unenforcedStepIds.
-export function agentDefaultBudgetSteps(
+export function minionDefaultBudgetSteps(
   def: Pick<WorkflowDef, "steps" | "maxBudgetUsd">,
   enforces: (model: string) => boolean = modelEnforcesBudget
 ): number {
-  return def.steps.filter((step) => isAgentDefaultBudget(step, def) && enforces(step.model)).length;
+  return def.steps.filter((step) => isMinionDefaultBudget(step, def) && enforces(step.model)).length;
 }
 
 // Sum of the caps that are actually enforced; see unenforcedStepIds for the rest.
@@ -315,7 +315,7 @@ export function workflowBudget(
   enforces: (model: string) => boolean = modelEnforcesBudget
 ): number {
   return def.steps
-    .filter((step) => enforces(step.model) && !isAgentDefaultBudget(step, def))
+    .filter((step) => enforces(step.model) && !isMinionDefaultBudget(step, def))
     .reduce((sum, step) => sum + stepBudget(step, def, config), 0);
 }
 
@@ -327,26 +327,26 @@ export function unenforcedStepIds(
 }
 
 // "budget cap $12.00", plus notes for steps whose adapter ignores the cap and
-// agent steps whose budget lives in their agent file (excluded from the sum).
-function formatBudgetCap(total: number, unenforced: number, agentDefault: number): string {
+// minion steps whose budget lives in their minion file (excluded from the sum).
+function formatBudgetCap(total: number, unenforced: number, minionDefault: number): string {
   const parts: string[] = [];
-  if (total > 0 || (unenforced === 0 && agentDefault === 0)) parts.push(`budget cap $${total.toFixed(2)}`);
+  if (total > 0 || (unenforced === 0 && minionDefault === 0)) parts.push(`budget cap $${total.toFixed(2)}`);
   if (unenforced > 0) parts.push(`${unenforced} step${unenforced === 1 ? "" : "s"} with no cost ceiling`);
-  if (agentDefault > 0)
-    parts.push(`${agentDefault} agent-default budget step${agentDefault === 1 ? "" : "s"}`);
+  if (minionDefault > 0)
+    parts.push(`${minionDefault} minion-default budget step${minionDefault === 1 ? "" : "s"}`);
   return parts.join(" + ");
 }
 
-const isAgentStep = (step: Pick<WorkflowStepDef, "agent">): boolean => (step.agent ?? "").trim() !== "";
+const isMinionStep = (step: Pick<WorkflowStepDef, "minion">): boolean => (step.minion ?? "").trim() !== "";
 
 // Pins each step's effective cap, timeout and turn limit (step, else workflow,
 // else config) into the definition, so a schedule's later runs use what the
-// user approved rather than whatever pi-minion.json says by then. Agent steps
-// are the exception: their tick re-reads the agent file, and the documented
-// precedence is explicit request > agent frontmatter > config, so only limits
+// user approved rather than whatever pi-minion.json says by then. Minion steps
+// are the exception: their tick re-reads the minion file, and the documented
+// precedence is explicit request > minion frontmatter > config, so only limits
 // the definition names explicitly stay pinned there — anything left to a
 // config default stays undefined, letting the tick merge frontmatter first and
-// then the current config. Non-agent steps keep the pin, and a run with no cap
+// then the current config. Non-minion steps keep the pin, and a run with no cap
 // anywhere pins the explicit "no cap" sentinel (null) instead of leaving it
 // undefined, which would let a tick fall back to a config.maxTurns set later.
 // (The runner must treat that null as a value, not an absence — see
@@ -356,15 +356,15 @@ export function withEffectiveLimits(
   config: Pick<MinionConfig, "maxBudgetUsd" | "timeoutMs" | "maxTurns">
 ): WorkflowDef {
   // The workflow-level pin only feeds steps without their own pinned value,
-  // i.e. agent steps: keep it explicit-only when one is present, or a config
-  // default would mask that agent's frontmatter on every tick.
-  const hasAgentStep = def.steps.some(isAgentStep);
+  // i.e. minion steps: keep it explicit-only when one is present, or a config
+  // default would mask that minion's frontmatter on every tick.
+  const hasMinionStep = def.steps.some(isMinionStep);
   return {
     ...def,
-    maxTurns: hasAgentStep ? def.maxTurns : stepMaxTurns(def, def, config) ?? null,
+    maxTurns: hasMinionStep ? def.maxTurns : stepMaxTurns(def, def, config) ?? null,
     steps: def.steps.map((step) => {
       const maxTurns = stepMaxTurns(step, def, config);
-      if (isAgentStep(step)) {
+      if (isMinionStep(step)) {
         return {
           ...step,
           maxBudgetUsd: step.maxBudgetUsd ?? def.maxBudgetUsd,
@@ -416,11 +416,11 @@ export function formatWorkflowScheduleLines(
   total: number,
   now: Date = new Date(),
   unenforced = 0,
-  agentDefault = 0
+  minionDefault = 0
 ): string[] {
   return [
     `Runs on "${cron}" — next run ${formatNextRun(nextRun, now)}`,
-    `${formatBudgetCap(total, unenforced, agentDefault).replace(/^budget/, "Budget")} per run`,
+    `${formatBudgetCap(total, unenforced, minionDefault).replace(/^budget/, "Budget")} per run`,
     "Stops itself when the final step reports done, or with cancel_pi_minion_schedule."
   ];
 }
@@ -441,7 +441,7 @@ export function formatWorkflowPlan(wf: Pick<MinionWorkflow, "title" | "context" 
     `Context: ${wf.context}`,
     "",
     ...wf.steps.flatMap((step) => [
-      `## ${step.id} (${step.model || `agent ${step.agent}`}/${step.effort || "agent default"})${step.dependsOn.length ? ` after ${step.dependsOn.join(", ")}` : ""}`,
+      `## ${step.id} (${step.model || `minion ${step.minion}`}/${step.effort || "minion default"})${step.dependsOn.length ? ` after ${step.dependsOn.join(", ")}` : ""}`,
       "",
       step.task,
       ""
@@ -463,13 +463,13 @@ export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: 
     { id, label: formatWorkflowLabel(wf) },
     ...wf.steps.flatMap((step) =>
       step.status === "running" && step.jobId
-        ? [{ id: step.jobId, label: `  › ${step.id} - ${step.model || `agent ${step.agent}`}` }]
+        ? [{ id: step.jobId, label: `  › ${step.id} - ${step.model || `minion ${step.minion}`}` }]
         : []
     )
   ];
 }
 
-// Structured confirm content for agent.ui.ts's confirmWorkflow overlay.
+// Structured confirm content for minion.ui.ts's confirmWorkflow overlay.
 // Stages are display-only groups; each step line names exactly what it waits for.
 export function formatWorkflowConfirm(
   def: WorkflowDef,
@@ -481,9 +481,9 @@ export function formatWorkflowConfirm(
   const stages = workflowStages(def.steps);
   const byId = new Map(def.steps.map((step) => [step.id, step]));
   const total = workflowBudget(def, config, enforces);
-  const agentDefault = agentDefaultBudgetSteps(def, enforces);
+  const minionDefault = minionDefaultBudgetSteps(def, enforces);
   const count = def.steps.length;
-  const title = `${def.title} — ${count} pi minion${count === 1 ? "" : "s"} in ${stages.length} stage${stages.length === 1 ? "" : "s"}, ${formatBudgetCap(total, unenforcedStepIds(def, enforces).length, agentDefault)}`;
+  const title = `${def.title} — ${count} pi minion${count === 1 ? "" : "s"} in ${stages.length} stage${stages.length === 1 ? "" : "s"}, ${formatBudgetCap(total, unenforcedStepIds(def, enforces).length, minionDefault)}`;
   const text = (value: string, muted = false): ConfirmLine[] =>
     value.split("\n").map((line) => [{ text: line, ...(muted ? { style: "muted" as const } : {}) }]);
   const lines: ConfirmLine[] = [[]];
@@ -498,18 +498,18 @@ export function formatWorkflowConfirm(
       const line: ConfirmLine = [
         { text: `  • ${id}: ${deriveJobTitle(step.task, CONFIRM_STEP_TITLE_LENGTH)} — ` },
         {
-          text: [step.model, step.effort && `${step.effort} effort`, step.agent && `agent ${step.agent}`]
+          text: [step.model, step.effort && `${step.effort} effort`, step.minion && `minion ${step.minion}`]
             .filter(Boolean)
             .join(", "),
           style: "effort",
           effort: step.effort
         }
       ];
-      // An agent step without an explicitly named timeout reads the agent file
+      // A minion step without an explicitly named timeout reads the minion file
       // each tick, so the config default would be the wrong number here.
       line.push(
-        isAgentStep(step) && step.timeoutMs === undefined && def.timeoutMs === undefined
-          ? { text: " · ≤ agent default timeout", style: "muted" }
+        isMinionStep(step) && step.timeoutMs === undefined && def.timeoutMs === undefined
+          ? { text: " · ≤ minion default timeout", style: "muted" }
           : { text: ` · ≤${formatDurationMs(stepTimeout(step, def, config))}`, style: "muted" }
       );
       if (!enforces(step.model)) line.push({ text: " · no cost ceiling", style: "muted" });
@@ -528,7 +528,7 @@ export function formatWorkflowConfirm(
     ...(scheduleLines
       ? [
           ...text(
-            "Each agent works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run (that summary starts a turn); otherwise the tick posts one quiet\nsummary — unless the run self-stops the schedule or no step succeeded; either starts a turn.",
+            "Each minion works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run (that summary starts a turn); otherwise the tick posts one quiet\nsummary — unless the run self-stops the schedule or no step succeeded; either starts a turn.",
             true
           ),
           [],
@@ -538,7 +538,7 @@ export function formatWorkflowConfirm(
         ]
       : [
           ...text(
-            "Each agent works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run and posts a summary; otherwise one summary posts when all\nfinish. Cancel anytime with \"cancel the workflow\".",
+            "Each minion works in the background in this workspace. A step that fails or reports its packet\nunworkable aborts the whole run and posts a summary; otherwise one summary posts when all\nfinish. Cancel anytime with \"cancel the workflow\".",
             true
           ),
           [],

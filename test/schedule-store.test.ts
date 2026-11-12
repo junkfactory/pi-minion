@@ -89,10 +89,10 @@ describe("formatScheduleLabel", () => {
     );
   });
 
-  it("names the agent when the schedule captured one", () => {
+  it("names the minion when the schedule captured one", () => {
     assert.equal(
-      formatScheduleLabel({ ...schedule, request: { ...schedule.request, agent: "code-reviewer" } }, next, undefined, now),
-      "⏱ Nightly review · code-reviewer agent · haiku / medium · 0 9 * * 1-5 · next 09:00"
+      formatScheduleLabel({ ...schedule, request: { ...schedule.request, minion: "code-reviewer" } }, next, undefined, now),
+      "⏱ Nightly review · code-reviewer minion · haiku / medium · 0 9 * * 1-5 · next 09:00"
     );
   });
 });

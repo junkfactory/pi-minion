@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
-import { createJobUI } from "../src/agent.ui.js";
+import { createJobUI } from "../src/minion.ui.js";
 import { backfillModal, cancelWorkflowMessage } from "../src/modal.js";
 import { fakeConfig, fakeCtx, fakeTheme, fakeTui } from "./fakes.js";
 

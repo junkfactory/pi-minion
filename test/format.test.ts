@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatTokenCount, formatTokenUsage } from "../src/agent.ui.js";
+import { formatTokenCount, formatTokenUsage } from "../src/minion.ui.js";
 import { deriveJobTitle, describeJobResult, formatCostUsd, formatJobFrontmatter, formatModelBreakdown, formatNotices, formatRelative, formatTokenModelBreakdown, thinkingPlaceholder, tokenCountsFromUsage, truncateResultForContext } from "../src/format.js";
 
 function fakeOutcome(overrides: Partial<Parameters<typeof describeJobResult>[0]> = {}) {
@@ -209,7 +209,7 @@ describe("formatTokenCount / formatTokenUsage / formatCostUsd", () => {
 });
 
 describe("formatJobFrontmatter", () => {
-  it("renders an agent heading followed by the stat fields, falling back to n/a for missing usage", () => {
+  it("renders a minion heading followed by the stat fields, falling back to n/a for missing usage", () => {
     const frontmatter = formatJobFrontmatter({
       jobId: "f66c0f52-f2e8-45bf-9a61-d40738af09fb",
       agent: "claude",

@@ -192,49 +192,49 @@ describe("referencedStepIds", () => {
   });
 });
 
-describe("agent steps", () => {
+describe("minion steps", () => {
   const step = (value: WorkflowStepDef) => value;
   const env = { maxResultPreviewBytes: 1_000, cwd: "/w", sessionId: "s1" };
 
-  it("keeps a step's named agent in the captured definition (ticks replay it)", () => {
+  it("keeps a step's named minion in the captured definition (ticks replay it)", () => {
     const wf = newWorkflow(
       {
         title: "Review",
         context: "c",
-        steps: [step({ id: "a", task: "Review", model: "", effort: "", agent: "code-reviewer" })]
+        steps: [step({ id: "a", task: "Review", model: "", effort: "", minion: "code-reviewer" })]
       },
       env
     );
-    assert.equal(wf.steps[0].agent, "code-reviewer");
+    assert.equal(wf.steps[0].minion, "code-reviewer");
     assert.equal(wf.steps[0].model, "");
   });
 
-  it("shows the agent in the confirm row when the step's model comes from it", () => {
+  it("shows the minion in the confirm row when the step's model comes from it", () => {
     const { lines } = formatWorkflowConfirm(
       {
         title: "T",
         context: "c",
-        steps: [step({ id: "a", task: "Review the diff", model: "", effort: "", agent: "code-reviewer" })]
+        steps: [step({ id: "a", task: "Review the diff", model: "", effort: "", minion: "code-reviewer" })]
       },
       config,
       undefined,
       () => true
     );
-    assert.match(plain(lines), /• a: Review the diff — agent code-reviewer · ≤ agent default timeout/);
+    assert.match(plain(lines), /• a: Review the diff — minion code-reviewer · ≤ minion default timeout/);
   });
 
-  it("shows the agent alongside an explicit model and effort", () => {
+  it("shows the minion alongside an explicit model and effort", () => {
     const { lines } = formatWorkflowConfirm(
       {
         title: "T",
         context: "c",
-        steps: [step({ id: "a", task: "Review the diff", model: "sonnet", effort: "high", agent: "code-reviewer" })]
+        steps: [step({ id: "a", task: "Review the diff", model: "sonnet", effort: "high", minion: "code-reviewer" })]
       },
       config,
       undefined,
       () => true
     );
-    assert.match(plain(lines), /• a: Review the diff — sonnet, high effort, agent code-reviewer · ≤ agent default timeout/);
+    assert.match(plain(lines), /• a: Review the diff — sonnet, high effort, minion code-reviewer · ≤ minion default timeout/);
   });
 });
 
@@ -268,7 +268,7 @@ describe("formatWorkflowConfirm", () => {
         "Stage 2",
         "  • verify: Verify each finding: {{steps.bugs.result}} — luna, low effort · ≤10m · starts when bugs, perf finish; uses its result",
         "",
-        "Each agent works in the background in this workspace. A step that fails or reports its packet",
+        "Each minion works in the background in this workspace. A step that fails or reports its packet",
         "unworkable aborts the whole run and posts a summary; otherwise one summary posts when all",
         "finish. Cancel anytime with \"cancel the workflow\".",
         "",
@@ -301,17 +301,17 @@ describe("formatWorkflowConfirm", () => {
 });
 
 describe("budget display with unenforced adapters", () => {
-  it("excludes agent-default budgets from the total and labels them", () => {
+  it("excludes minion-default budgets from the total and labels them", () => {
     const workflow = {
       title: "T",
       context: "c",
-      steps: def({ id: "a", agent: "reviewer", model: "", effort: "high" }, { id: "b", maxBudgetUsd: 2 })
+      steps: def({ id: "a", minion: "reviewer", model: "", effort: "high" }, { id: "b", maxBudgetUsd: 2 })
     };
-    // The agent step's budget lives in its agent file, re-read each tick.
+    // The minion step's budget lives in its minion file, re-read each tick.
     assert.equal(workflowBudget(workflow, config, () => true), 2);
     const { title, lines } = formatWorkflowConfirm(workflow, config, undefined, () => true);
-    assert.equal(title, "T — 2 pi minions in 1 stage, budget cap $2.00 + 1 agent-default budget step");
-    assert.match(plain(lines), /• a: .*· ≤ agent default timeout/);
+    assert.equal(title, "T — 2 pi minions in 1 stage, budget cap $2.00 + 1 minion-default budget step");
+    assert.match(plain(lines), /• a: .*· ≤ minion default timeout/);
   });
   const steps = def({ id: "a", maxBudgetUsd: 2 }, { id: "b", model: "gpt-5" }, { id: "c", model: "gpt-5", maxBudgetUsd: 9 });
   const enforces = (model: string) => model !== "gpt-5";
@@ -391,17 +391,17 @@ describe("withEffectiveLimits", () => {
     assert.equal(workflowBeatsConfig.steps[0].maxTurns, 7);
   });
 
-  it("pins only explicit limits for an agent step, so the tick's frontmatter merge wins over config", () => {
+  it("pins only explicit limits for an minion step, so the tick's frontmatter merge wins over config", () => {
     const configDefaults = { maxBudgetUsd: 5, timeoutMs: 600_000, maxTurns: 9 };
     const pinned = withEffectiveLimits(
       {
         title: "T",
         context: "c",
-        steps: def({ id: "a", agent: "reviewer", model: "", effort: "" })
+        steps: def({ id: "a", minion: "reviewer", model: "", effort: "" })
       },
       configDefaults
     );
-    // Config-only values stay undefined: the tick re-merges the agent file,
+    // Config-only values stay undefined: the tick re-merges the minion file,
     // and frontmatter outranks the config default. The workflow-level pin must
     // not fall back to the config either (it would mask the same frontmatter).
     assert.equal(pinned.steps[0].maxBudgetUsd, undefined);
@@ -409,7 +409,7 @@ describe("withEffectiveLimits", () => {
     assert.equal(pinned.steps[0].maxTurns, undefined);
     assert.equal(pinned.maxTurns, undefined);
 
-    // Values the definition names explicitly stay pinned, agent step included.
+    // Values the definition names explicitly stay pinned, minion step included.
     const explicit = withEffectiveLimits(
       {
         title: "T",
@@ -418,7 +418,7 @@ describe("withEffectiveLimits", () => {
         timeoutMs: 30_000,
         maxTurns: 7,
         steps: def(
-          { id: "a", agent: "reviewer", model: "", effort: "" },
+          { id: "a", minion: "reviewer", model: "", effort: "" },
           { id: "b", maxBudgetUsd: 1, timeoutMs: 2_000 }
         )
       },
@@ -434,20 +434,20 @@ describe("withEffectiveLimits", () => {
     assert.equal(explicit.maxTurns, 7);
   });
 
-  it("keeps the no-cap sentinel on non-agent steps of a mixed def", () => {
+  it("keeps the no-cap sentinel on non-minion steps of a mixed def", () => {
     // config has no maxTurns here, so the plain step pins the null sentinel —
     // which the runner must pass through as a value, not drop via `??`.
     const mixed = withEffectiveLimits(
       {
         title: "T",
         context: "c",
-        steps: def({ id: "a", agent: "reviewer", model: "", effort: "" }, { id: "b" })
+        steps: def({ id: "a", minion: "reviewer", model: "", effort: "" }, { id: "b" })
       },
       config
     );
-    assert.equal(mixed.maxTurns, undefined, "def-level pin stays explicit-only with an agent step");
-    assert.equal(mixed.steps[0].maxTurns, undefined, "agent step: frontmatter re-reads at tick");
-    assert.equal(mixed.steps[1].maxTurns, null, "non-agent step keeps the null sentinel");
+    assert.equal(mixed.maxTurns, undefined, "def-level pin stays explicit-only with an minion step");
+    assert.equal(mixed.steps[0].maxTurns, undefined, "minion step: frontmatter re-reads at tick");
+    assert.equal(mixed.steps[1].maxTurns, null, "non-minion step keeps the null sentinel");
   });
 
   it("rejects an invalid workflow-level maxTurns even when every step overrides it", () => {

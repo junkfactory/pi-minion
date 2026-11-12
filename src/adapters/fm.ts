@@ -32,7 +32,7 @@ export const DEFAULT_SCHEMA = {
 };
 
 // help_pi_minion lines advertising what fm can do beyond plain text. Worded
-// agent-facing: no "adapter" anywhere; the fm family is named by its model ids.
+// for the calling agent: no "adapter" anywhere; the fm family is named by its model ids.
 export const FM_USAGE_NOTES = [
   "use only for very basic tasks like generating slugs, titles, reading barcode and ocr",
   "fm (fm:system) is one-shot with no agent tools — the task must be self-contained; there is no cost reporting and effort is ignored.",

@@ -14,7 +14,7 @@ import { createFmAdapter, FM_USAGE_NOTES } from "../src/adapters/fm.js";
 import { setAdaptersForTest } from "../src/adapters/registry.js";
 import { createFakeAdapter, fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
-  buildHelpAgentList,
+  buildHelpMinionList,
   buildHelpModelList,
   buildUsageNotes,
   PI_MINION_EXAMPLES,
@@ -256,12 +256,12 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, baseArgs()), true);
   });
 
-  it("still rejects a call missing task, but takes model only from the agent", () => {
+  it("still rejects a call missing task, but takes model only from the minion", () => {
     const { task, ...withoutTask } = baseArgs();
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutTask), false);
     const { model, ...withoutModel } = baseArgs();
-    // Optional in the schema so a prompt-only agent can be named instead; an
-    // omitted model with no agent still fails, but in validateRequest.
+    // Optional in the schema so a prompt-only minion can be named instead; an
+    // omitted model with no minion still fails, but in validateRequest.
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, withoutModel), true);
     assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "model"), /Required unless the named `minion` supplies one/);
   });
@@ -271,7 +271,7 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...withoutModelEffort, minion: "code-reviewer" }), true);
     assert.equal(Check(RUN_PI_MINION_PARAMETERS, { ...baseArgs(), minion: 7 }), false);
     const minion = descriptionOf(RUN_PI_MINION_PARAMETERS, "minion");
-    assert.match(minion, /help_pi_minion's `agents` list/);
+    assert.match(minion, /help_pi_minion's `minions` list/);
     assert.match(minion, /unknown name fails with the list of valid names/);
     assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `minion` supplies one/);
   });
@@ -368,7 +368,7 @@ describe("RUN_PI_MINION_WORKFLOW_PARAMETERS", () => {
       Check(RUN_PI_MINION_WORKFLOW_PARAMETERS, { ...args, steps: [{ ...stepWithoutModelEffort, minion: "reviewer" }] }),
       true
     );
-    assert.match(descriptionOf(stepSchema(), "minion"), /help_pi_minion's `agents` list/);
+    assert.match(descriptionOf(stepSchema(), "minion"), /help_pi_minion's `minions` list/);
   });
 
   it("accepts a step's own timeoutMs and a workflow-level one", () => {
@@ -520,32 +520,32 @@ describe("schedule cap pinning", () => {
   });
 });
 
-describe("agent param", () => {
-  it("keeps the named agent on the captured schedule request, so every tick replays it", () => {
+describe("minion param", () => {
+  it("keeps the named minion on the captured schedule request, so every tick replays it", () => {
     const pinned = pinScheduleRequest(
-      { task: "t", workspace: "/w", model: "haiku", effort: "low", agent: "code-reviewer" },
+      { task: "t", workspace: "/w", model: "haiku", effort: "low", minion: "code-reviewer" },
       { timeoutMs: 1_000, maxTurns: 3 }
     );
-    assert.equal(pinned.agent, "code-reviewer");
+    assert.equal(pinned.minion, "code-reviewer");
   });
 
   it("adds one help note pointing a matching task at `minion` instead of model+effort", () => {
     const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `minion`"));
-    assert.ok(note, "PI_MINION_USAGE_NOTES carries the agent usage note");
+    assert.ok(note, "PI_MINION_USAGE_NOTES carries the minion usage note");
     assert.match(note!, /rather than picking model\+effort yourself/);
   });
 });
 
-describe("buildHelpAgentList", () => {
-  it("lists agents from a populated dir and nothing from an empty one", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pi-minion-agents-"));
+describe("buildHelpMinionList", () => {
+  it("lists minions from a populated dir and nothing from an empty one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-minions-"));
     try {
-      assert.deepEqual(await buildHelpAgentList(dir), [], "an empty dir lists nothing");
+      assert.deepEqual(await buildHelpMinionList(dir), [], "an empty dir lists nothing");
       await writeFile(
         join(dir, "code-reviewer.md"),
         "---\ndescription: Reviews changes for correctness\n---\n\nYou review code.\n"
       );
-      assert.deepEqual(await buildHelpAgentList(dir), [
+      assert.deepEqual(await buildHelpMinionList(dir), [
         { name: "code-reviewer", description: "Reviews changes for correctness" }
       ]);
     } finally {
@@ -632,7 +632,7 @@ describe("registerTools prompt footprint", () => {
       cancel_pi_minion: 1,
       cancel_pi_minion_schedule: 0,
       cancel_pi_minion_workflow: 0,
-      help_pi_minion: 3,
+      help_pi_minion: 2,
       list_pi_minion_schedules: 0,
       list_pi_minion_workflows: 0,
       list_pi_minions: 0,
@@ -668,7 +668,7 @@ describe("registerTools prompt footprint", () => {
     assert.match((missing.content[0] as { text: string }).text, /No running pi minion job job-missing/);
   });
 
-  it("help payload carries the model routing table and the agents list", async () => {
+  it("help payload carries the model routing table and the minions list", async () => {
     const help = byName.get("help_pi_minion");
     assert.ok(help, "help_pi_minion is not registered");
     // Pin a config-bound fake so ensureRegistry() no-ops inside execute():
@@ -685,17 +685,17 @@ describe("registerTools prompt footprint", () => {
       );
       const payload = result.details as {
         modelRouting?: string;
-        agents?: Array<{ name: string; description: string }>;
+        minions?: Array<{ name: string; description: string }>;
         usageNotes?: string[];
       };
-      assert.ok(Array.isArray(payload.agents), "payload.agents must be a list");
+      assert.ok(Array.isArray(payload.minions), "payload.minions must be a list");
       assert.ok(
-        payload.agents!.every((agent) => typeof agent.name === "string" && typeof agent.description === "string"),
-        "every listed agent carries a name and description"
+        payload.minions!.every((minion) => typeof minion.name === "string" && typeof minion.description === "string"),
+        "every listed minion carries a name and description"
       );
       assert.ok(
         payload.usageNotes?.some((note) => note.includes("pass `minion`")),
-        "payload.usageNotes carries the agent note"
+        "payload.usageNotes carries the minion note"
       );
       assert.equal(typeof payload.modelRouting, "string", "payload.modelRouting must be a string");
       assert.ok(
@@ -707,11 +707,11 @@ describe("registerTools prompt footprint", () => {
     }
   });
 
-  it("schedule rows name the captured agent", async () => {
+  it("schedule rows name the captured minion", async () => {
     const list = byName.get("list_pi_minion_schedules");
     assert.ok(list, "list_pi_minion_schedules is registered");
     const job = new Cron("0 9 * * *", () => {});
-    schedules.set("s-agent", {
+    schedules.set("s-minion", {
       title: "Nightly review",
       cron: "0 9 * * *",
       request: {
@@ -719,7 +719,7 @@ describe("registerTools prompt footprint", () => {
         workspace: "/w",
         model: "haiku",
         effort: "low",
-        agent: "code-reviewer"
+        minion: "code-reviewer"
       },
       effort: "low",
       cwd: "/w",
@@ -736,20 +736,20 @@ describe("registerTools prompt footprint", () => {
         undefined,
         { sessionManager: { getSessionId: () => "test-session" } } as unknown as ExtensionToolContext
       );
-      const rows = result.details as { schedules: Array<{ id: string; agent?: string }> };
-      assert.equal(rows.schedules.find((row) => row.id === "s-agent")?.agent, "code-reviewer");
+      const rows = result.details as { schedules: Array<{ id: string; minion?: string }> };
+      assert.equal(rows.schedules.find((row) => row.id === "s-minion")?.minion, "code-reviewer");
     } finally {
-      schedules.delete("s-agent");
+      schedules.delete("s-minion");
       job.stop();
     }
   });
 
-  it("job rows expose the captured agent alongside the agent-led title", async () => {
+  it("job rows expose the captured minion alongside the minion-led title", async () => {
     const list = byName.get("list_pi_minions");
     assert.ok(list, "list_pi_minions is registered");
-    jobMeta.set("j-agent", {
+    jobMeta.set("j-minion", {
       title: "reviewer: Review the diff",
-      agent: "reviewer",
+      minion: "reviewer",
       model: "haiku",
       prompt: "Review the diff",
       workspace: "/w",
@@ -764,12 +764,12 @@ describe("registerTools prompt footprint", () => {
         undefined,
         { cwd: "/w", sessionManager: { getSessionId: () => "test-session" } } as unknown as ExtensionToolContext
       );
-      const rows = result.details as { jobs: Array<{ id: string; title: string; agent?: string }> };
-      const row = rows.jobs.find((job) => job.id === "j-agent");
-      assert.equal(row?.agent, "reviewer");
+      const rows = result.details as { jobs: Array<{ id: string; title: string; minion?: string }> };
+      const row = rows.jobs.find((job) => job.id === "j-minion");
+      assert.equal(row?.minion, "reviewer");
       assert.equal(row?.title, "reviewer: Review the diff");
     } finally {
-      jobMeta.delete("j-agent");
+      jobMeta.delete("j-minion");
     }
   });
 

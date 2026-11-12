@@ -416,7 +416,7 @@ function formatWidgetLines(
 
 // The bordered box shared by the detail modal and the workflow confirm
 // dialog. Moved to modal-shell.ts (Step 1 of the reusable-modal-helper plan)
-// so the shell can own framing without an agent.ui ↔ shell import cycle.
+// so the shell can own framing without a minion.ui ↔ shell import cycle.
 
 /**
  * FrameSpec for the job-detail modal: the accent border (uniform chrome
@@ -533,7 +533,7 @@ export async function confirmWorkflow(
   let selected = CONFIRM_OPTIONS.indexOf("No");
   const reason = new Input({
     prompt: "reason: ",
-    placeholder: "tell the agent why…",
+    placeholder: "tell the orchestrator why…",
     placeholderStyle: (text) => ctx.ui.theme.fg("muted", text)
   });
   reason.focused = true;

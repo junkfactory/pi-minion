@@ -2,7 +2,7 @@ import { readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createJobUI, type JobUI } from "./agent.ui.js";
+import { createJobUI, type JobUI } from "./minion.ui.js";
 import { resolveAdapterForModel } from "./adapters/registry.js";
 import {
   DISPLAY_ENTRY_TYPE,

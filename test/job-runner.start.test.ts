@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { StepRunStats } from "../src/agent.ui.js";
+import type { StepRunStats } from "../src/minion.ui.js";
 
 const realHome = process.env.HOME;
 const realPath = process.env.PATH;
@@ -497,20 +497,20 @@ describe("startJob", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("records the agent-merged model/effort for a job started with empty ones", async () => {
-    // The agent dir is the real one under the temp HOME startJob resolves
-    // against (startJob threads it to validateRequest as its agentDir seam;
+  it("records the minion-merged model/effort for a job started with empty ones", async () => {
+    // The minion dir is the real one under the temp HOME startJob resolves
+    // against (startJob threads it to validateRequest as its minionDir seam;
     // the injected-seam path itself is covered by the test below).
-    const agentDir = join(home, ".pi", "agent", "pi-minion", "agents");
-    mkdirSync(agentDir, { recursive: true });
+    const minionDir = join(home, ".pi", "agent", "pi-minion", "minions");
+    mkdirSync(minionDir, { recursive: true });
     writeFileSync(
-      join(agentDir, "reviewer.md"),
+      join(minionDir, "reviewer.md"),
       "---\ndescription: Reviews changes\nmodel: sonnet\neffort: high\nmaxBudgetUsd: 2\n---\nYou review.\n"
     );
     try {
       const { sessionId, posts } = newSession();
       const id = await startJob(
-        { task: "Do a thing MODE:ok", workspace, model: "", effort: "", agent: "reviewer" },
+        { task: "Do a thing MODE:ok", workspace, model: "", effort: "", minion: "reviewer" },
         workspace,
         sessionId,
         undefined,
@@ -546,20 +546,20 @@ describe("startJob", () => {
       assert.ok(child, "child session written");
       assert.match(child, /"thinkingLevel":"high"/);
     } finally {
-      rmSync(agentDir, { recursive: true, force: true });
+      rmSync(minionDir, { recursive: true, force: true });
     }
   });
 
-  it("routes agent diagnostics through startJob's injected agentDir/log seams", async () => {
-    const agentDir = join(root, "agents-bad");
-    mkdirSync(agentDir, { recursive: true });
-    writeFileSync(join(agentDir, "bad.md"), "# no frontmatter\n");
+  it("routes minion diagnostics through startJob's injected minionDir/log seams", async () => {
+    const minionDir = join(root, "minions-bad");
+    mkdirSync(minionDir, { recursive: true });
+    writeFileSync(join(minionDir, "bad.md"), "# no frontmatter\n");
     const events: string[] = [];
     try {
       const { sessionId } = newSession();
       await assert.rejects(
         startJob(
-          { task: "Do a thing MODE:ok", workspace, model: "", effort: "", agent: "bad" },
+          { task: "Do a thing MODE:ok", workspace, model: "", effort: "", minion: "bad" },
           workspace,
           sessionId,
           undefined,
@@ -569,14 +569,14 @@ describe("startJob", () => {
           undefined,
           undefined,
           undefined,
-          agentDir,
+          minionDir,
           (event, info) => events.push(`${event} ${info.id}`)
         ),
-        /Unknown agent "bad"/
+        /Unknown minion "bad"/
       );
-      assert.equal(events.filter((line) => line.startsWith("agent_invalid")).length, 1);
+      assert.equal(events.filter((line) => line.startsWith("minion_invalid")).length, 1);
     } finally {
-      rmSync(agentDir, { recursive: true, force: true });
+      rmSync(minionDir, { recursive: true, force: true });
     }
   });
 

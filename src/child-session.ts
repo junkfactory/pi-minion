@@ -42,10 +42,10 @@ function assistantMessage(provider: string, entry: ModelBreakdown, text: string 
 export function writeChildSession(params: {
   parentSessionFile?: string;
   cwd: string;
-  // The job's display label without its model/agent prefix; `agent`, when
-  // set, replaces the model in the "<agent-or-model>: <name>" session name.
+  // The job's display label without its model/minion prefix; `minion`, when
+  // set, replaces the model in the "<minion-or-model>: <name>" session name.
   name: string;
-  agent?: string;
+  minion?: string;
   prompt: string;
   resultText: string;
   provider: string;
@@ -78,7 +78,7 @@ export function writeChildSession(params: {
       assistantMessage(params.provider, entry, i === entries.length - 1 ? params.resultText : undefined, params.finishedAt + i)
     );
   });
-  session.appendSessionInfo(`${params.agent ?? params.model}: ${params.name}`);
+  session.appendSessionInfo(`${params.minion ?? params.model}: ${params.name}`);
   return session.getSessionFile();
 }
 

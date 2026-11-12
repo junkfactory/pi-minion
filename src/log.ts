@@ -27,12 +27,12 @@ export type JobLogEvent =
   // A workflow step rejected before spawn (validation/model-routing error);
   // job_id is the step id since no job exists yet.
   | "step_failed"
-  // An agent file skipped at load (parse/validation failure); job_id is the
+  // A minion file skipped at load (parse/validation failure); job_id is the
   // file name since no job is involved.
-  | "agent_invalid"
-  // An agent's `tools` list ignored because the merged model runs on a
-  // non-claude adapter; job_id is the agent name since no job is involved.
-  | "agent_tools_ignored";
+  | "minion_invalid"
+  // A minion's `tools` list ignored because the merged model runs on a
+  // non-claude adapter; job_id is the minion name since no job is involved.
+  | "minion_tools_ignored";
 
 // logPath/rotatedPath/maxBytes default to the real ~/.pi paths, overridable
 // so tests can exercise rotation against a temp dir (same rationale as

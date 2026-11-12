@@ -9,7 +9,7 @@ import {
   type ModalState,
   type WorkflowConfirm,
   type WorkflowConfirmResult,
-  type JobStatusUpdate, type WorkflowWidgetStatus } from "../src/agent.ui.js";
+  type JobStatusUpdate, type WorkflowWidgetStatus } from "../src/minion.ui.js";
 import { fakeCtx, fakeTheme, fakeTui, type WidgetFactory } from "./fakes.js";
 
 function job(overrides: Partial<JobStatusUpdate> = {}): JobStatusUpdate {

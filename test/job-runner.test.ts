@@ -33,12 +33,12 @@ describe("validateRequest", () => {
     }
   });
 
-  it("rejects a model-less request with no agent instructively", async () => {
+  it("rejects a model-less request with no minion instructively", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
       await assert.rejects(
         validateRequest(fakeRequest({ workspace: dir, model: "" }), dir, fakeConfig()),
-        /model is required unless `agent` supplies one/
+        /model is required unless `minion` supplies one/
       );
     } finally {
       await rm(dir, { recursive: true });
@@ -130,7 +130,7 @@ describe("validateRequest", () => {
     }
   });
 
-  it("rejects a missing effort with a hint that tells the agent how to pick one", async () => {
+  it("rejects a missing effort with a hint that tells the minion how to pick one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
       await assert.rejects(
@@ -208,39 +208,39 @@ describe("validateRequest", () => {
   });
 });
 
-describe("validateRequest agent requests", () => {
+describe("validateRequest minion requests", () => {
   before(() => setAdaptersForTest([createFakeAdapter(fakeConfig())]));
   after(() => setAdaptersForTest());
 
   const BODY = "You are a code review specialist. Find real bugs, not style nits.";
-  const agentFile = (frontmatter: string, body = BODY) => `---\n${frontmatter}\n---\n\n${body}\n`;
+  const minionFile = (frontmatter: string, body = BODY) => `---\n${frontmatter}\n---\n\n${body}\n`;
 
-  // One temp root per test: `<root>/agents` is the agent dir, and `<root>`
+  // One temp root per test: `<root>/minions` is the minion dir, and `<root>`
   // itself is the workspace (validateRequest requires workspace === cwd).
-  async function withAgentDir(
+  async function withMinionDir(
     files: Record<string, string>,
-    run: (dirs: { workspace: string; agents: string }) => Promise<void>
+    run: (dirs: { workspace: string; minions: string }) => Promise<void>
   ): Promise<void> {
     const workspace = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
     try {
-      const agents = join(workspace, "agents");
-      await mkdir(agents);
-      for (const [name, raw] of Object.entries(files)) await writeFile(join(agents, name), raw);
-      await run({ workspace, agents });
+      const minions = join(workspace, "minions");
+      await mkdir(minions);
+      for (const [name, raw] of Object.entries(files)) await writeFile(join(minions, name), raw);
+      await run({ workspace, minions });
     } finally {
       await rm(workspace, { recursive: true });
     }
   }
 
   it("lets explicit request values beat frontmatter defaults", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\nmodel: opus\neffort: high") },
-      async ({ workspace, agents }) => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: opus\neffort: high") },
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "reviewer", model: "sonnet", effort: "medium" }),
+          fakeRequest({ workspace, minion: "reviewer", model: "sonnet", effort: "medium" }),
           workspace,
           fakeConfig(),
-          agents
+          minions
         );
         assert.equal(result.model, "sonnet");
         assert.equal(result.effort, "medium");
@@ -249,20 +249,20 @@ describe("validateRequest agent requests", () => {
   });
 
   it("fills the gaps the request leaves from frontmatter, ahead of config defaults", async () => {
-    await withAgentDir(
+    await withMinionDir(
       {
-        "reviewer.md": agentFile(
+        "reviewer.md": minionFile(
           "description: Reviews changes\nmodel: opus\neffort: high\nmaxTurns: 5\nmaxBudgetUsd: 2\ntimeoutMs: 60000"
         )
       },
-      async ({ workspace, agents }) => {
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "reviewer", model: "", effort: "" }),
+          fakeRequest({ workspace, minion: "reviewer", model: "", effort: "" }),
           workspace,
           fakeConfig({ maxTurns: 400 }),
-          agents
+          minions
         );
-        assert.equal(result.agent, "reviewer");
+        assert.equal(result.minion, "reviewer");
         assert.equal(result.model, "opus");
         assert.equal(result.effort, "high");
         assert.equal(result.maxTurns, 5); // frontmatter beats config.maxTurns 400
@@ -272,30 +272,30 @@ describe("validateRequest agent requests", () => {
     );
   });
 
-  it("keeps a pinned no-cap maxTurns over the agent's default", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\nmodel: opus\nmaxTurns: 5") },
-      async ({ workspace, agents }) => {
+  it("keeps a pinned no-cap maxTurns over the minion's default", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: opus\nmaxTurns: 5") },
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "reviewer", model: "" , effort: "medium", maxTurns: null }),
+          fakeRequest({ workspace, minion: "reviewer", model: "" , effort: "medium", maxTurns: null }),
           workspace,
           fakeConfig(),
-          agents
+          minions
         );
         assert.equal(result.maxTurns, null);
       }
     );
   });
 
-  it("composes the agent body with the operational tail, without the generic identity line", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\nmodel: sonnet") },
-      async ({ workspace, agents }) => {
+  it("composes the minion body with the operational tail, without the generic identity line", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet") },
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "reviewer", effort: "medium" }),
+          fakeRequest({ workspace, minion: "reviewer", effort: "medium" }),
           workspace,
           fakeConfig(),
-          agents
+          minions
         );
         assert.equal(result.systemPrompt, `${BODY}\n\n${MINION_OPERATIONAL_TAIL}`);
         assert.ok(result.systemPrompt.startsWith(BODY));
@@ -306,66 +306,66 @@ describe("validateRequest agent requests", () => {
     );
   });
 
-  it("names the agent when the merged model is empty", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Prompt-only agent") },
-      async ({ workspace, agents }) => {
+  it("names the minion when the merged model is empty", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Prompt-only minion") },
+      async ({ workspace, minions }) => {
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "reviewer", model: "" }),
+            fakeRequest({ workspace, minion: "reviewer", model: "" }),
             workspace,
             fakeConfig(),
-            agents
+            minions
           ),
-          /agent 'reviewer' defines no model — pass `model` explicitly/
+          /minion 'reviewer' defines no model — pass `model` explicitly/
         );
       }
     );
   });
 
-  it("names the agent when the merged effort is empty", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\nmodel: sonnet") },
-      async ({ workspace, agents }) => {
+  it("names the minion when the merged effort is empty", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet") },
+      async ({ workspace, minions }) => {
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "reviewer", effort: "" }),
+            fakeRequest({ workspace, minion: "reviewer", effort: "" }),
             workspace,
             fakeConfig(),
-            agents
+            minions
           ),
-          /agent 'reviewer' defines no effort/
+          /minion 'reviewer' defines no effort/
         );
       }
     );
   });
 
-  it("rejects an unknown agent with the available names", async () => {
-    await withAgentDir(
+  it("rejects an unknown minion with the available names", async () => {
+    await withMinionDir(
       {
-        "reviewer.md": agentFile("description: Reviews changes\nmodel: sonnet"),
-        "researcher.md": agentFile("description: Researches\nmodel: sonnet")
+        "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet"),
+        "researcher.md": minionFile("description: Researches\nmodel: sonnet")
       },
-      async ({ workspace, agents }) => {
+      async ({ workspace, minions }) => {
         await assert.rejects(
-          validateRequest(fakeRequest({ workspace, agent: "nope" }), workspace, fakeConfig(), agents),
-          /Unknown agent "nope"\. Available agents: researcher, reviewer\./
+          validateRequest(fakeRequest({ workspace, minion: "nope" }), workspace, fakeConfig(), minions),
+          /Unknown minion "nope"\. Available minions: researcher, reviewer\./
         );
       }
     );
   });
 
-  it("treats a blank agent as absent", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\nmodel: opus") },
-      async ({ workspace, agents }) => {
+  it("treats a blank minion as absent", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: opus") },
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "   " }),
+          fakeRequest({ workspace, minion: "   " }),
           workspace,
           fakeConfig(),
-          agents
+          minions
         );
-        assert.equal(result.agent, undefined);
+        assert.equal(result.minion, undefined);
         assert.equal(result.systemPrompt, undefined);
         assert.equal(result.allowedTools, undefined);
         assert.equal(result.model, "sonnet");
@@ -374,14 +374,14 @@ describe("validateRequest agent requests", () => {
   });
 
   it("narrows frontmatter tools to config.allowedTools", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\ntools: [Bash, Grep, Read]") },
-      async ({ workspace, agents }) => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\ntools: [Bash, Grep, Read]") },
+      async ({ workspace, minions }) => {
         const result = await validateRequest(
-          fakeRequest({ workspace, agent: "reviewer" }),
+          fakeRequest({ workspace, minion: "reviewer" }),
           workspace,
           fakeConfig({ allowedTools: ["Bash", "Read"] }),
-          agents
+          minions
         );
         assert.deepEqual(result.allowedTools, ["Bash", "Read"]);
       }
@@ -389,15 +389,15 @@ describe("validateRequest agent requests", () => {
   });
 
   it("rejects frontmatter tools that config.allowedTools leaves empty", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\ntools: [Grep]") },
-      async ({ workspace, agents }) => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\ntools: [Grep]") },
+      async ({ workspace, minions }) => {
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "reviewer" }),
+            fakeRequest({ workspace, minion: "reviewer" }),
             workspace,
             fakeConfig({ allowedTools: ["Read"] }),
-            agents
+            minions
           ),
           /none of which config.allowedTools permits/
         );
@@ -405,37 +405,37 @@ describe("validateRequest agent requests", () => {
     );
   });
 
-  it("rejects an agent that lists no tools at all", async () => {
-    await withAgentDir(
-      { "reviewer.md": agentFile("description: Reviews changes\ntools: []") },
-      async ({ workspace, agents }) => {
+  it("rejects an minion that lists no tools at all", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\ntools: []") },
+      async ({ workspace, minions }) => {
         await assert.rejects(
-          validateRequest(fakeRequest({ workspace, agent: "reviewer" }), workspace, fakeConfig(), agents),
+          validateRequest(fakeRequest({ workspace, minion: "reviewer" }), workspace, fakeConfig(), minions),
           /lists no tools/
         );
       }
     );
   });
 
-  it("keeps the agent's own tools when config.allowedTools pins nothing, and inherits config when the agent omits tools", async () => {
-    await withAgentDir(
+  it("keeps the minion's own tools when config.allowedTools pins nothing, and inherits config when the minion omits tools", async () => {
+    await withMinionDir(
       {
-        "scoped.md": agentFile("description: Scoped\ntools: [Bash, Grep]"),
-        "plain.md": agentFile("description: Plain")
+        "scoped.md": minionFile("description: Scoped\ntools: [Bash, Grep]"),
+        "plain.md": minionFile("description: Plain")
       },
-      async ({ workspace, agents }) => {
+      async ({ workspace, minions }) => {
         const scoped = await validateRequest(
-          fakeRequest({ workspace, agent: "scoped" }),
+          fakeRequest({ workspace, minion: "scoped" }),
           workspace,
           fakeConfig({ allowedTools: [] }),
-          agents
+          minions
         );
         assert.deepEqual(scoped.allowedTools, ["Bash", "Grep"]);
         const plain = await validateRequest(
-          fakeRequest({ workspace, agent: "plain" }),
+          fakeRequest({ workspace, minion: "plain" }),
           workspace,
           fakeConfig({ allowedTools: ["Bash"] }),
-          agents
+          minions
         );
         assert.equal(plain.allowedTools, undefined);
       }
@@ -452,29 +452,29 @@ describe("validateRequest agent requests", () => {
       createFakeAdapter(fakeConfig({ models: { allowed: ["fake-model"], blocked: [] } }))
     ]);
     try {
-      await withAgentDir(
+      await withMinionDir(
         {
-          "reviewer.md": agentFile(
+          "reviewer.md": minionFile(
             "description: Reviews changes\nmodel: fake-model\ntools: [bash, read]"
           )
         },
-        async ({ workspace, agents }) => {
+        async ({ workspace, minions }) => {
           const logs: Array<{ event: string; id: string; model: string; detail?: string }> = [];
           const result = await validateRequest(
-            fakeRequest({ workspace, agent: "reviewer", model: "" }),
+            fakeRequest({ workspace, minion: "reviewer", model: "" }),
             workspace,
             fakeConfig({
               models: { allowed: ["fake-model"], blocked: [] },
               allowedTools: ["Bash", "Read"]
             }),
-            agents,
+            minions,
             (event, info) => logs.push({ event, ...info })
           );
           assert.equal(result.allowedTools, undefined);
           assert.equal(logs.length, 1);
-          assert.equal(logs[0].event, "agent_tools_ignored");
+          assert.equal(logs[0].event, "minion_tools_ignored");
           assert.equal(logs[0].id, "reviewer");
-          assert.match(logs[0].detail ?? "", /agent=reviewer/);
+          assert.match(logs[0].detail ?? "", /minion=reviewer/);
           assert.match(logs[0].detail ?? "", /adapter=fake-cli/);
           assert.match(logs[0].detail ?? "", /claude only/);
         }
@@ -493,15 +493,15 @@ describe("validateRequest agent requests", () => {
     after(() => setAdaptersForTest([createFakeAdapter(fakeConfig())]));
 
     it("still narrows frontmatter tools to config.allowedTools", async () => {
-      await withAgentDir(
-        { "reviewer.md": agentFile("description: Reviews changes\nmodel: sonnet\ntools: [Bash, Grep, Read]") },
-        async ({ workspace, agents }) => {
+      await withMinionDir(
+        { "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet\ntools: [Bash, Grep, Read]") },
+        async ({ workspace, minions }) => {
           const logs: Array<{ event: string }> = [];
           const result = await validateRequest(
-            fakeRequest({ workspace, agent: "reviewer" }),
+            fakeRequest({ workspace, minion: "reviewer" }),
             workspace,
             fakeConfig({ allowedTools: ["Bash", "Read"] }),
-            agents,
+            minions,
             (event) => logs.push({ event })
           );
           assert.deepEqual(result.allowedTools, ["Bash", "Read"]);
@@ -511,15 +511,15 @@ describe("validateRequest agent requests", () => {
     });
 
     it("still rejects an empty intersection", async () => {
-      await withAgentDir(
-        { "locked.md": agentFile("description: Locked\nmodel: sonnet\ntools: [WebFetch]") },
-        async ({ workspace, agents }) => {
+      await withMinionDir(
+        { "locked.md": minionFile("description: Locked\nmodel: sonnet\ntools: [WebFetch]") },
+        async ({ workspace, minions }) => {
           await assert.rejects(
             validateRequest(
-              fakeRequest({ workspace, agent: "locked" }),
+              fakeRequest({ workspace, minion: "locked" }),
               workspace,
               fakeConfig({ allowedTools: ["Read"] }),
-              agents
+              minions
             ),
             /none of which config\.allowedTools permits/
           );
@@ -529,37 +529,37 @@ describe("validateRequest agent requests", () => {
   });
 
   it("gates the merged model: frontmatter cannot launder a blocked or unlisted model", async () => {
-    await withAgentDir(
+    await withMinionDir(
       {
-        "blocked.md": agentFile("description: Blocked model\nmodel: opus"),
-        "unlisted.md": agentFile("description: Unlisted model\nmodel: other-model"),
-        "fake.md": agentFile("description: Fake provider model\nmodel: fake-model")
+        "blocked.md": minionFile("description: Blocked model\nmodel: opus"),
+        "unlisted.md": minionFile("description: Unlisted model\nmodel: other-model"),
+        "fake.md": minionFile("description: Fake provider model\nmodel: fake-model")
       },
-      async ({ workspace, agents }) => {
+      async ({ workspace, minions }) => {
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "blocked", model: "" }),
+            fakeRequest({ workspace, minion: "blocked", model: "" }),
             workspace,
             fakeConfig({ models: { allowed: [], blocked: ["opus"] } }),
-            agents
+            minions
           ),
           /Model is blocked: opus/
         );
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "unlisted", model: "" }),
+            fakeRequest({ workspace, minion: "unlisted", model: "" }),
             workspace,
             fakeConfig(),
-            agents
+            minions
           ),
           /Model is not allowed: other-model/
         );
         await assert.rejects(
           validateRequest(
-            fakeRequest({ workspace, agent: "fake", model: "" }),
+            fakeRequest({ workspace, minion: "fake", model: "" }),
             workspace,
             fakeConfig({ providers: { allowed: [], blocked: ["fakeprovider"] } }),
-            agents
+            minions
           ),
           /excluded by the providers config/
         );
