@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.0]
+
+- New ←/→ navigation in the open job-detail preview: when the picked job belongs to a workflow with more than one started step, the picker passes a step-nav context and the footer shows the step indicator on the single hint row (scroll keys + `← → step <id> · i/n` flush left, `Esc close` flush right). Left/right swaps the modal to the sibling step in place — retargeting the mounted state and replaying the sibling's `stdout.json` through one shared loader, so open and switch run the same sequence. Steps without a `jobId` are skipped, navigation clamps at the ends, and standalone jobs and schedules are unchanged.
+- Loading-order fixes from a round of independent review: live stream events that arrive while a step's history is being replayed are held and applied after the replay (hold/flush on `JobUI`, with queued mutations re-checking the modal's current `jobId` so a queue stranded by a ←/→ swap drops itself); a finished step's turn badge now seeds from its frozen jobMeta (`turnsSeen`/`maxTurns`) when the live registry has already dropped the job; a sibling whose jobMeta was pruned shows a placeholder header instead of the originally opened job's title; and one malformed stored line no longer aborts the whole replay.
+
 ## [0.3.0]
 
 - Let claude minions use skills and the full tool surface

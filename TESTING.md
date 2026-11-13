@@ -78,6 +78,37 @@ Run against a real Pi session before considering interactive/TUI changes
 pi -e ./extensions/index.ts -p "some prompt that exercises the change"
 ```
 
+## Countdown smoke (workflow steps, dev mode)
+
+The standing smoke test for workflow mechanics and the step-preview modal in
+a real dev-mode session: 3 parallel workflow steps, each counting down from
+60 to 0, exactly one assistant turn per number (61 turns per step).
+
+Launch it from the orchestrator session with `run_pi_minion_workflow`:
+
+- 3 steps (`count-a/b/c`), no dependencies, model `opencode-go/deepseek-v4.1-flash`
+  at `low` effort, workflow `maxTurns: 61`.
+- Each step's task must state the turn mechanics explicitly: on every turn
+  from 60 down to 1, output exactly that number AND make one trivial tool
+  call (`bash` with `true`) — the tool call is what keeps the agent loop
+  going to the next turn. The final turn outputs `0` with NO tool call,
+  which ends the run.
+- To stop early: `cancel_pi_minion_workflow` (running steps cancel cleanly).
+
+Verify while it runs (open a step preview from the workflow picker):
+
+- One number per turn, strict descending order, no merged lines.
+- The modal's footer is one row: keys + `← → step count-a · 1/3` flush
+  left, `Esc close` flush right; ←/→ swaps between the three steps in place.
+- Live chunks keep arriving while a step runs (the hold/flush backfill
+  ordering holds when swapping mid-stream).
+
+Known failure mode (do not drop the tool-call instruction): a step whose
+replies carry no tool call ends after its first turn — it either stops at
+`60` or reports the one-number-per-turn constraint unsatisfiable
+(2026-11-13). The `maxTurns: 61` cap is the backstop that turns a runaway
+into a clean `maxTurns reached` cancel.
+
 ## Manual checklist for UI changes (widget, picker, modal)
 
 - Widget appears on job start, ticks live, clears when the job finishes.
@@ -99,6 +130,12 @@ pi -e ./extensions/index.ts -p "some prompt that exercises the change"
   terminal.
 
 ## Execution log
+
+- 2026-11-13 — step-preview footer alignment + countdown smoke: 3×60→0
+  steps ran green against dev mode; footer verified as one row (keys/step
+  indicator left, Esc close right), ←/→ swap verified mid-stream; first
+  attempt without the tool-call instruction failed as documented above
+  (steps stopped at turn 1).
 
 - 2026-10-07 — providers filter feature: matrix 4/4 green; provider block
   emptied the list as designed; undo restored 44/44; run-time gate proven
