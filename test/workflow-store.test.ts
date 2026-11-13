@@ -8,6 +8,7 @@ import {
   formatWorkflowConfirm,
   formatWorkflowLabel,
   workflowPickerRows,
+  workflowForJobId,
   workflowStepTitle,
   formatWorkflowPlan,
   formatWorkflowScheduleLines,
@@ -544,6 +545,26 @@ describe("workflow step naming and picker rows", () => {
       { id: "wf1", label: formatWorkflowLabel(wf) },
       { id: "job-x", label: `  › ✗ ${wf.steps[0]!.id} - haiku` }
     ]);
+  });
+});
+
+describe("workflowForJobId", () => {
+  it("finds the workflow that owns a step's job", () => {
+    const wf = fakeWorkflow();
+    wf.steps[1]!.jobId = "job-b";
+    const other = fakeWorkflow({ title: "Other", steps: [] });
+    const map = new Map([
+      ["wf1", other],
+      ["wf2", wf]
+    ]);
+    assert.equal(workflowForJobId(map, "job-b"), wf);
+  });
+
+  it("returns undefined for an unknown job id", () => {
+    const wf = fakeWorkflow();
+    wf.steps[1]!.jobId = "job-b";
+    assert.equal(workflowForJobId(new Map([["wf1", wf]]), "nope"), undefined);
+    assert.equal(workflowForJobId(new Map(), "job-b"), undefined);
   });
 });
 

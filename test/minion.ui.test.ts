@@ -4,12 +4,15 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   confirmWorkflow,
   createJobUI,
+  jobDetailSpec,
   renderWorkflowConfirmBody,
   renderWorkflowConfirmLines,
+  stepNavFor,
   type ModalState,
   type WorkflowConfirm,
   type WorkflowConfirmResult,
   type JobStatusUpdate, type WorkflowWidgetStatus } from "../src/minion.ui.js";
+import { Viewport } from "../src/modal-shell.js";
 import { fakeCtx, fakeTheme, fakeTui, type WidgetFactory } from "./fakes.js";
 
 function job(overrides: Partial<JobStatusUpdate> = {}): JobStatusUpdate {
@@ -1059,5 +1062,120 @@ describe("workflow confirm overlay", () => {
       const ctx = { ui: { theme: fakeTheme(), custom: async () => value } };
       assert.deepEqual(await confirmWorkflow(ctx as any, confirm), expected);
     }
+  });
+});
+
+describe("Viewport reset", () => {
+  it("re-arms tail-following after a content swap", () => {
+    const viewport = new Viewport();
+    const bodyRows = 10;
+    const total = 100;
+
+    // Scrolling up disarms following, so a plain re-render keeps the reader's place.
+    viewport.pageBy(-1, bodyRows, total);
+    assert.equal(viewport.resolveText(total, bodyRows), 0);
+
+    viewport.reset();
+    assert.equal(viewport.resolveText(total, bodyRows), total - bodyRows);
+  });
+
+  it("clears a line-scroll offset", () => {
+    const viewport = new Viewport();
+    const bodyRows = 10;
+    const total = 100;
+
+    viewport.resolveText(total, bodyRows);
+    viewport.lineBy(-1, bodyRows, total);
+    assert.equal(viewport.offset, total - bodyRows - 1);
+
+    viewport.reset();
+    assert.equal(viewport.offset, 0);
+  });
+});
+
+describe("stepNavFor", () => {
+  const workflowSteps = [
+    { id: "plan", jobId: "job1", model: "sonnet" },
+    { id: "build", jobId: "job2", minion: "implementer" },
+    { id: "review", jobId: "job3" }
+  ];
+
+  it("builds nav over the started steps in workflow-step order", () => {
+    const nav = stepNavFor(workflowSteps, "job2");
+    assert.ok(nav);
+    assert.deepEqual(nav.ids, ["job1", "job2", "job3"]);
+    assert.equal(nav.index, 1);
+    assert.equal(nav.label("job1"), "plan");
+    assert.equal(nav.label("job3"), "review");
+  });
+
+  it("skips steps that have not started (no jobId)", () => {
+    const nav = stepNavFor(
+      [{ id: "plan", jobId: "job1" }, { id: "build" }, { id: "review", jobId: "job3" }],
+      "job1"
+    );
+    assert.ok(nav);
+    assert.deepEqual(nav.ids, ["job1", "job3"]);
+    assert.equal(nav.index, 0);
+  });
+
+  it("returns undefined for a single-step workflow", () => {
+    assert.equal(stepNavFor([{ id: "plan", jobId: "job1" }], "job1"), undefined);
+    assert.equal(stepNavFor([{ id: "plan", jobId: "job1" }, { id: "build" }], "job1"), undefined);
+  });
+
+  it("returns undefined for an unknown job id", () => {
+    assert.equal(stepNavFor(workflowSteps, "job9"), undefined);
+  });
+});
+
+describe("jobDetailSpec footer nav indicator", () => {
+  function modalState(overrides: Partial<ModalState> = {}): ModalState {
+    return {
+      jobId: "job2",
+      title: "Build the thing",
+      model: "sonnet",
+      effort: "medium",
+      prompt: "do it",
+      blocks: [],
+      finished: false,
+      requestRender: () => {},
+      ...overrides
+    };
+  }
+
+  function footerRows(state: ModalState) {
+    return jobDetailSpec(state).footerRows({ theme: fakeTheme() as any, innerWidth: 80 });
+  }
+
+  it("renders the step indicator when nav is present", () => {
+    const nav = stepNavFor(
+      [{ id: "plan", jobId: "job1" }, { id: "build", jobId: "job2" }, { id: "review", jobId: "job3" }],
+      "job2"
+    );
+    const rows = footerRows(modalState({ nav }));
+
+    // One row: scroll keys + step indicator flush left, Esc close flush right
+    // (headerRow's gap math; innerWidth 80 − left 43 − right 9 = 28 spaces).
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0], null);
+    const row = rows[1] as string;
+    assert.ok(
+      row.startsWith("↑↓ scroll · ⇧↑↓ page · ← → step build · 2/3"),
+      `expected step indicator flush left, got: ${JSON.stringify(row)}`
+    );
+    assert.ok(row.endsWith("Esc close"), `expected Esc close flush right, got: ${JSON.stringify(row)}`);
+    assert.ok(row.includes(" ".repeat(28)), "expected a right-align gap between left and right halves");
+  });
+
+  it("keeps the hint-only footer for standalone jobs", () => {
+    const rows = footerRows(modalState());
+
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0], null);
+    const row = rows[1] as string;
+    assert.ok(row.startsWith("↑↓ scroll · ⇧↑↓ page"));
+    assert.ok(row.endsWith("Esc close"));
+    assert.ok(!row.includes("step"), "standalone footer must not show a step indicator");
   });
 });

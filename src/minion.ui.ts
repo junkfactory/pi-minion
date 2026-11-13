@@ -54,7 +54,8 @@ import {
   ModalShell,
   openModal as mountModal,
   Viewport,
-  type FrameSpec
+  type FrameSpec,
+  type InputHook
 } from "./modal-shell.js";
 
 export type JobStatusUpdate = {
@@ -161,7 +162,9 @@ export interface JobUI {
    */
   openModal(
     id: string,
-    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean }
+    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean },
+    nav?: StepNav,
+    loadJob?: ModalJobLoader
   ): Promise<void>;
   /** Modal: feed a streamed text chunk to the open modal, if one is open for this id. No-op otherwise. */
   appendModalText(id: string, text: string): void;
@@ -182,6 +185,20 @@ export interface JobUI {
   /** Modal: mark the open modal's job finished, if one is open for this id. No-op otherwise; does not close it. */
   finishModalJob(id: string): void;
   /**
+   * Modal: hold this id's stream mutations instead of applying them — each
+   * one is queued in arrival order until flushModalEvents releases it. Used
+   * by a step load so live chunks that arrive while its stdout.json backfill
+   * is still being read can't land ahead of the replayed history. No-op
+   * unless a modal is open for this id.
+   */
+  holdModalEvents(id: string): void;
+  /** Modal: release a hold and apply the queued mutations in order. Each
+   *  queued mutation re-checks the modal's *current* jobId, so a queue left
+   *  over from a ←/→ swap (or a torn-down modal) drops itself. No-op unless a
+   *  modal is open for this id.
+   */
+  flushModalEvents(id: string): void;
+  /**
    * Modal: register an externally-owned ModalState as the currently active
    * detail, so stream mutators (appendModalText / startModalTextBlock /
    * startModalToolCall / updateModalToolCallArgs / finishModalToolCall /
@@ -199,7 +216,10 @@ const DEFAULT_WIDGET_KEY = "pi-minion-jobs";
 const DEFAULT_MAX_WIDGET_LINES = 12;
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
-const MODAL_FOOTER_HINT = "↑↓ scroll · ⇧↑↓ page · Esc close";
+// Footer halves: keys + step indicator flush left, Esc close flush right,
+// joined by headerRow's gap math on one row so the frame keeps its height.
+const MODAL_FOOTER_KEYS = "↑↓ scroll · ⇧↑↓ page";
+const MODAL_FOOTER_ESC = "Esc close";
 const MODAL_TOOL_ARGS_SNIPPET_LENGTH = 80;
 const MODAL_TOOL_OUTPUT_SNIPPET_LENGTH = 160;
 
@@ -219,6 +239,45 @@ type ModalToolCallBlock = {
 // extra position bookkeeping.
 type ModalBlock = ModalTextBlock | ModalToolCallBlock;
 
+/**
+ * Sibling steps of one job inside a workflow, so ←/→ can step between a
+ * workflow's step previews without closing the modal. `ids` is in
+ * workflow-step order; `index` is the position of the job currently shown.
+ * Absent on standalone jobs and schedules (nothing to step to).
+ */
+export type StepNav = {
+  ids: string[];
+  index: number;
+  /** Step label for the footer indicator (the step's own id). */
+  label(jobId: string): string;
+};
+
+/**
+ * Loads one job's content into an already-mounted preview modal (replay +
+ * terminal marker). Supplied by the caller that owns the job store, so this
+ * module keeps no opinion on where a job's output lives; the initial load and
+ * every ←/→ swap go through it, so open and switch run the same sequence.
+ */
+export type ModalJobLoader = (state: ModalState, id: string) => Promise<void>;
+
+/**
+ * ←/→ step switching ahead of the job-detail bindings: with a nav context the
+ * arrows are claimed and clamped (the ends do nothing), every other key falls
+ * through to `jobDetailScrollKeys` unchanged. `nav.index` is read live — the
+ * swap moves it in place.
+ */
+export function stepPreviewNavKeys(nav: StepNav, swap: (nextIndex: number) => void): InputHook {
+  return (data, api) => {
+    const delta = matchesKey(data, "left") ? -1 : matchesKey(data, "right") ? 1 : 0;
+    if (delta !== 0) {
+      const next = Math.min(nav.ids.length - 1, Math.max(0, nav.index + delta));
+      if (next !== nav.index) swap(next);
+      return true;
+    }
+    return jobDetailScrollKeys(data, api);
+  };
+}
+
 export type ModalState = {
   jobId: string;
   title: string;
@@ -231,8 +290,36 @@ export type ModalState = {
   turns?: { current: number; max?: number };
   blocks: ModalBlock[];
   finished: boolean;
+  /** Present only while previewing a workflow step that has siblings. */
+  nav?: StepNav;
   requestRender: () => void;
+  /** Internal: while true, stream mutations queue on `pending` instead of applying. */
+  holding?: boolean;
+  /** Internal: mutations queued while `holding`; drained in order by flushModalEvents. */
+  pending?: Array<() => void>;
 };
+
+/**
+ * Pure: the nav context for `jobId` among `workflowSteps`, or undefined when
+ * it has fewer than two started siblings (a single-step workflow has nothing
+ * to step to) or `jobId` is not one of the steps.
+ */
+export function stepNavFor(
+  workflowSteps: ReadonlyArray<{ jobId?: string; id: string; model?: string; minion?: string }>,
+  jobId: string
+): StepNav | undefined {
+  // Steps that haven't started have no jobId and so no preview to show.
+  const started = workflowSteps.flatMap((step) =>
+    step.jobId ? [{ jobId: step.jobId, id: step.id }] : []
+  );
+  const index = started.findIndex((step) => step.jobId === jobId);
+  if (started.length < 2 || index === -1) return undefined;
+  return {
+    ids: started.map((step) => step.jobId),
+    index,
+    label: (id) => started.find((step) => step.jobId === id)?.id ?? id
+  };
+}
 
 export function renderModalBlock(theme: Theme, block: ModalBlock): string {
   if (block.type === "text") return block.text;
@@ -463,7 +550,15 @@ export function jobDetailSpec(state: ModalState): FrameSpec {
         : "Working…";
       return { text: `${state.prompt}\n\n${separator}\n\n${blocks}` };
     },
-    footerRows: ({ theme }) => [null, theme.fg("muted", MODAL_FOOTER_HINT)],
+    footerRows: ({ theme, innerWidth }) => {
+      const left = state.nav
+        ? `${MODAL_FOOTER_KEYS} · ← → step ${state.nav.label(state.jobId)} · ${state.nav.index + 1}/${state.nav.ids.length}`
+        : MODAL_FOOTER_KEYS;
+      return [
+        null,
+        headerRow(theme, theme.fg("muted", left), theme.fg("muted", MODAL_FOOTER_ESC), innerWidth)
+      ];
+    },
     fillBody: true
   };
 }
@@ -832,7 +927,9 @@ export function createJobUI(
 
   function openModal(
     id: string,
-    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean }
+    initial: { title: string; model: string; prompt: string; text?: string; effort?: string; finished?: boolean },
+    nav?: StepNav,
+    loadJob?: ModalJobLoader
   ): Promise<void> {
     const state: ModalState = {
       jobId: id,
@@ -843,9 +940,14 @@ export function createJobUI(
       blocks: initial.text ? [{ type: "text", text: initial.text }] : [],
       finished: initial.finished ?? false,
       turns: jobs.get(id)?.turns,
+      nav,
       requestRender: () => {}
     };
     activeModal = state;
+    // The caller's loader replays a job's stored events into this state; the
+    // initial load runs here (synchronously, before the mount) and ←/→ swaps
+    // reuse the same loader, so open and switch share one sequence.
+    if (loadJob) void loadJob(state, id).catch(() => {});
     return mountModal(ctx, {
       fallback: undefined,
       heightRatio: 0.7,
@@ -855,13 +957,28 @@ export function createJobUI(
       make: (tui, done) => {
         state.requestRender = () => tui.requestRender();
         const viewport = new Viewport();
+        // ←/→ swap: retarget the mounted state in place (activeModal holds
+        // this same object, so the live stream re-routes to the new job with
+        // no extra plumbing), then let the loader replay the new step. The
+        // loader drops its own result if a later press already moved
+        // state.jobId on, so rapid presses can't interleave two backfills.
+        const swap = (next: number) => {
+          const newId = state.nav?.ids[next];
+          if (!newId || !loadJob) return;
+          state.turns = jobs.get(newId)?.turns;
+          state.nav!.index = next;
+          state.jobId = newId;
+          viewport.reset();
+          state.requestRender();
+          void loadJob(state, newId).catch(() => {});
+        };
         const shell = new ModalShell<undefined>({
           theme: ctx.ui.theme,
           tui,
           done,
           spec: jobDetailSpec(state),
           viewport: () => viewport,
-          input: jobDetailScrollKeys
+          input: state.nav ? stepPreviewNavKeys(state.nav, swap) : jobDetailScrollKeys
         });
         // dispose() clears the active-modal reference as the detail modal's
         // dispose did; mountModal's finally covers promise settle (resolve and reject).
@@ -874,38 +991,78 @@ export function createJobUI(
     });
   }
 
+  // Shared gate for every stream mutation: route only to the modal showing
+  // `id`, and while a step load holds that modal, queue the mutation's own
+  // entry point (`requeue`) instead of applying it. Re-entering the mutator
+  // on flush re-runs this gate against the modal's *current* jobId, so a
+  // queue stranded by a ←/→ swap drops itself instead of leaking into the
+  // step now on screen. `apply` is the single implementation of the mutation.
+  function gateModalMutation(
+    id: string,
+    apply: (state: ModalState) => void,
+    requeue: () => void
+  ): void {
+    const state = activeModal;
+    if (state?.jobId !== id) return;
+    if (state.holding) {
+      (state.pending ??= []).push(requeue);
+      return;
+    }
+    apply(state);
+  }
+
   function appendModalText(id: string, text: string): void {
-    if (activeModal?.jobId !== id) return;
-    const last = activeModal.blocks.at(-1);
-    if (last?.type === "text") last.text += text;
-    else activeModal.blocks.push({ type: "text", text });
-    activeModal.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        const last = state.blocks.at(-1);
+        if (last?.type === "text") last.text += text;
+        else state.blocks.push({ type: "text", text });
+        state.requestRender();
+      },
+      () => appendModalText(id, text)
+    );
   }
 
   function startModalTextBlock(id: string): void {
-    if (activeModal?.jobId !== id) return;
-    if (activeModal.blocks.length === 0) return;
-    activeModal.blocks.push({ type: "text", text: "" });
+    gateModalMutation(
+      id,
+      (state) => {
+        if (state.blocks.length === 0) return;
+        state.blocks.push({ type: "text", text: "" });
+      },
+      () => startModalTextBlock(id)
+    );
   }
 
   function startModalToolCall(id: string, toolCallId: string, name: string): void {
-    if (activeModal?.jobId !== id) return;
-    activeModal.blocks.push({ type: "toolCall", id: toolCallId, name });
-    activeModal.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        state.blocks.push({ type: "toolCall", id: toolCallId, name });
+        state.requestRender();
+      },
+      () => startModalToolCall(id, toolCallId, name)
+    );
   }
 
-  function findModalToolCall(id: string, toolCallId: string): ModalToolCallBlock | undefined {
-    if (activeModal?.jobId !== id) return undefined;
-    return activeModal.blocks.find(
+  function findModalToolCall(state: ModalState, toolCallId: string): ModalToolCallBlock | undefined {
+    return state.blocks.find(
       (block): block is ModalToolCallBlock => block.type === "toolCall" && block.id === toolCallId
     );
   }
 
   function updateModalToolCallArgs(id: string, toolCallId: string, args: Record<string, unknown>): void {
-    const block = findModalToolCall(id, toolCallId);
-    if (!block) return;
-    block.args = args;
-    activeModal!.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        const block = findModalToolCall(state, toolCallId);
+        if (!block) return;
+        block.args = args;
+        state.requestRender();
+      },
+      () => updateModalToolCallArgs(id, toolCallId, args)
+    );
   }
 
   function finishModalToolCall(
@@ -913,22 +1070,55 @@ export function createJobUI(
     toolCallId: string,
     result: { durationMs?: number; output?: string; isError: boolean }
   ): void {
-    const block = findModalToolCall(id, toolCallId);
-    if (!block) return;
-    Object.assign(block, result);
-    activeModal!.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        const block = findModalToolCall(state, toolCallId);
+        if (!block) return;
+        Object.assign(block, result);
+        state.requestRender();
+      },
+      () => finishModalToolCall(id, toolCallId, result)
+    );
   }
 
   function setModalModel(id: string, model: string): void {
-    if (activeModal?.jobId !== id) return;
-    activeModal.model = model;
-    activeModal.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        state.model = model;
+        state.requestRender();
+      },
+      () => setModalModel(id, model)
+    );
   }
 
   function finishModalJob(id: string): void {
-    if (activeModal?.jobId !== id) return;
-    activeModal.finished = true;
-    activeModal.requestRender();
+    gateModalMutation(
+      id,
+      (state) => {
+        state.finished = true;
+        state.requestRender();
+      },
+      () => finishModalJob(id)
+    );
+  }
+
+  function holdModalEvents(id: string): void {
+    if (activeModal?.jobId === id) activeModal.holding = true;
+  }
+
+  function flushModalEvents(id: string): void {
+    const state = activeModal;
+    if (state?.jobId !== id) return;
+    state.holding = false;
+    // Detach before draining: each queued closure re-enters its mutator, so
+    // the queue must be empty for those re-entries to apply rather than
+    // re-queue (and a re-entrant hold during the drain starts a fresh queue).
+    const pending = state.pending;
+    state.pending = undefined;
+    if (!pending) return;
+    for (const run of pending) run();
   }
 
   // Externally-owned ModalState (e.g. the trail browser's inline detail
@@ -966,6 +1156,8 @@ export function createJobUI(
     finishModalToolCall,
     setModalModel,
     finishModalJob,
+    holdModalEvents,
+    flushModalEvents,
     setActiveDetail,
     dispose
   };

@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { JobUI } from "./minion.ui.js";
+import { stepNavFor } from "./minion.ui.js";
+import type { JobUI, ModalState, StepNav } from "./minion.ui.js";
 import type { AgentCliAdapter, NormalizedEvent } from "./adapters/types.js";
 import type { JobMetaEntry } from "./job-types.js";
 import { getAdapter, listAdapterNames, resolveAdapterForModel } from "./adapters/registry.js";
@@ -24,6 +25,7 @@ import {
 import { cancelWorkflow, defaultWorkflowDeps } from "./workflow-runner.js";
 import {
   workflowPickerRows,
+  workflowForJobId,
   workflowIdsOwnedBySession,
   workflowStatus,
   workflows
@@ -72,11 +74,17 @@ export function applyModalEvent(
 // live picker to backfill a late-opened modal, and by the trail browser's
 // detail view (which registers its ModalState via setActiveDetail so stream
 // routing still flows into the same state this writes to).
+// `state`, when given, is the modal a step loader is backfilling: its event
+// hold is lifted for the replay, because the replay must land *before* the
+// live chunks that queued while this read was still pending. The replay loop
+// is synchronous, so nothing live can slip in between; the hold is restored
+// for the loader to flush the queue behind the replayed history.
 export async function backfillModal(
   jobDir: string,
   adapter: AgentCliAdapter,
   jobUI: JobUI,
-  id: string
+  id: string,
+  state?: ModalState
 ): Promise<void> {
   let raw: string;
   try {
@@ -84,29 +92,110 @@ export async function backfillModal(
   } catch {
     return;
   }
-  for (const line of raw.split(/\r?\n/)) {
-    for (const event of adapter.parseLine(line)) applyModalEvent(jobUI, id, event);
+  const holding = state?.holding;
+  if (state) state.holding = false;
+  try {
+    for (const line of raw.split(/\r?\n/)) {
+      // One malformed stored line (a torn write, a truncated tail) must not
+      // abort the replay of the rest of the job's history.
+      try {
+        for (const event of adapter.parseLine(line)) applyModalEvent(jobUI, id, event);
+      } catch {
+        continue;
+      }
+    }
+  } finally {
+    if (state) state.holding = holding;
   }
 }
 
+// The header/fallback fields a preview needs; the picker's fallback object
+// and a jobMeta entry both satisfy it. turnsSeen/maxTurns are optional so the
+// picker's fallback (which has no turn history) still satisfies it.
+type JobPreviewMeta = Pick<
+  JobMetaEntry,
+  "title" | "model" | "effort" | "prompt" | "resolvedModel" | "turnsSeen" | "maxTurns"
+>;
+
+// Header for a ←/→ sibling the picker holds no metadata for (its jobMeta can
+// be pruned, e.g. by a session replacement). A visible unknown beats showing
+// the originally opened job's title/model/prompt under another step's jobId.
+const unknownStepMeta: JobPreviewMeta = { title: "pi minion step", model: "?", prompt: "" };
+
+// The open/switch tail shared by a fresh preview and a ←/→ step switch:
+// retarget the mounted state, replay the job's stored events into it, then
+// mark a terminal jobMeta finished so the modal shows its finished marker
+// instead of a spinner (mirrors trail-picker's openDetailForJob).
+// `state.jobId` doubles as the swap's sequence token: a later ←/→ press moves
+// it before this load's await resolves, and the stored replay is then dropped
+// instead of interleaving two backfills (its streamed events are already
+// dropped by the same jobId routing gate in minion.ui.ts).
+// Live events for this job route into the same state while the read is in
+// flight, so the load holds them from the synchronous prefix (before the
+// first await — that is the only window where nothing has been replayed yet)
+// and flushes them after the replay, keeping new chunks below older history.
+export async function loadJobIntoModal(
+  jobUI: JobUI,
+  state: ModalState,
+  id: string,
+  meta: JobPreviewMeta
+): Promise<void> {
+  state.jobId = id;
+  state.title = meta.title;
+  state.model = meta.resolvedModel ?? meta.model;
+  state.effort = meta.effort;
+  state.prompt = meta.prompt;
+  // A running job's live count (seeded by openModal and by the ←/→ swap) wins;
+  // the live registry drops a job the instant it finishes, so a finished
+  // step's frozen jobMeta count fills the gap and keeps its turn badge.
+  state.turns ??=
+    meta.turnsSeen !== undefined ? { current: meta.turnsSeen, max: meta.maxTurns } : undefined;
+  state.blocks = [];
+  state.finished = false;
+  state.requestRender();
+  jobUI.holdModalEvents(id);
+  await backfillModal(join(JOB_ROOT, id), resolveAdapterForJob(meta.model), jobUI, id, state);
+  if (state.jobId !== id) return;
+  // Ahead of the terminal marker: a queued live event lands on the replayed
+  // history, and finishModalJob's own marker (queued or not) comes last.
+  jobUI.flushModalEvents(id);
+  const stored = jobMeta.get(id);
+  if (stored && stored.status !== "running") jobUI.finishModalJob(id);
+}
+
 // Opens a job's preview modal: live stream if the job is running
-// (applyModalEvent routing), else a replay of stdout.json from disk.
-// A terminal jobMeta gets finishModalJob so the modal shows its finished
-// marker instead of a spinner (mirrors trail-picker's openDetailForJob).
+// (applyModalEvent routing), else a replay of stdout.json from disk. `nav`,
+// when given, lets ←/→ switch to a sibling workflow step in place.
 export async function openJobPreview(
   jobUI: JobUI,
   id: string,
-  meta: Pick<JobMetaEntry, "title" | "model" | "effort" | "prompt" | "resolvedModel">
+  meta: JobPreviewMeta,
+  nav?: StepNav
 ): Promise<void> {
-  jobUI.openModal(id, {
-    title: meta.title,
-    model: meta.resolvedModel ?? meta.model,
-    effort: meta.effort,
-    prompt: meta.prompt
-  });
-  await backfillModal(join(JOB_ROOT, id), resolveAdapterForJob(meta.model), jobUI, id);
-  const stored = jobMeta.get(id);
-  if (stored && stored.status !== "running") jobUI.finishModalJob(id);
+  // openModal creates the modal state synchronously and its own promise
+  // settles on close, so the initial load's promise is captured from the
+  // loader openModal runs at creation — openJobPreview resolves once the
+  // first job has been replayed, as it always has.
+  let initial: Promise<void> = Promise.resolve();
+  jobUI.openModal(
+    id,
+    {
+      title: meta.title,
+      model: meta.resolvedModel ?? meta.model,
+      effort: meta.effort,
+      prompt: meta.prompt
+    },
+    nav,
+    (state, nextId) => {
+      // The picker's own meta describes the id it opened; for a sibling with
+      // no jobMeta left, show the placeholder rather than this job's header.
+      const stepMeta = jobMeta.get(nextId) ?? (nextId === id ? meta : unknownStepMeta);
+      const load = loadJobIntoModal(jobUI, state, nextId, stepMeta);
+      if (nextId === id) initial = load;
+      return load;
+    }
+  );
+  await initial;
 }
 
 // A job's recorded model (or the "?" placeholder when even jobMeta has no
@@ -239,7 +328,10 @@ export async function openPiMinionsPicker(ctx: ExtensionContext): Promise<void> 
       sessionId,
       status: "running" as const
     };
-    await openJobPreview(jobUI, id, fallback);
+    // A workflow step previews with ←/→ across its siblings; standalone jobs
+    // and schedules pass no nav context, so their behavior is unchanged.
+    const owner = workflowForJobId(workflows, id);
+    await openJobPreview(jobUI, id, fallback, owner ? stepNavFor(owner.steps, id) : undefined);
     return;
   }
 }

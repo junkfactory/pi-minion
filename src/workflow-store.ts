@@ -470,6 +470,18 @@ export function workflowPickerRows(id: string, wf: MinionWorkflow): Array<{ id: 
   ];
 }
 
+// The workflow a step's job belongs to, so its preview can offer ←/→ across
+// its siblings. Undefined for standalone jobs and schedules (no owning step).
+export function workflowForJobId(
+  workflows: ReadonlyMap<string, MinionWorkflow>,
+  id: string
+): MinionWorkflow | undefined {
+  for (const wf of workflows.values()) {
+    if (wf.steps.some((step) => step.jobId === id)) return wf;
+  }
+  return undefined;
+}
+
 // Structured confirm content for minion.ui.ts's confirmWorkflow overlay.
 // Stages are display-only groups; each step line names exactly what it waits for.
 export function formatWorkflowConfirm(

@@ -80,6 +80,12 @@ export class Viewport {
     this.offset = Math.max(0, Math.min(this.offset + pages * Math.max(1, bodyRows), maxScroll));
   }
 
+  /** Reset to the top and re-arm tail-following after a content swap. */
+  reset(): void {
+    this.offset = 0;
+    this.following = true;
+  }
+
   /** Clamp `offset` so `row` sits inside the body window. */
   keepRowVisible(row: number, bodyRows: number, total: number): void {
     const maxScroll = Math.max(0, total - bodyRows);
