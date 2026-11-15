@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.0]
+
+- Bundled `routingTable` and `costGate` defaults removed from the shipped `pi-minion.json` — both are now defined only by your override file (`~/.pi/agent/extensions/pi-minion.json`); when `routingTable` is unset there is no table, so the primary agent picks the model and effort itself from the available models and asks the user when unsure, and when `costGate` is unset no cost gate is applied.
+- `help_pi_minion`'s routing-table field is renamed `modelRouting` → `routingTable`, matching the override-file key; no compatibility alias (the rendered table still carries the `**Model Routing:**` title).
+
 ## [0.4.0]
 
 - New ←/→ navigation in the open job-detail preview: when the picked job belongs to a workflow with more than one started step, the picker passes a step-nav context and the footer shows the step indicator on the single hint row (scroll keys + `← → step <id> · i/n` flush left, `Esc close` flush right). Left/right swaps the modal to the sibling step in place — retargeting the mounted state and replaying the sibling's `stdout.json` through one shared loader, so open and switch run the same sequence. Steps without a `jobId` are skipped, navigation clamps at the ends, and standalone jobs and schedules are unchanged.
@@ -11,7 +16,6 @@
 - Document the release flow in README
 - Fix prev-tag parse in tag.sh
 - Port the pi-bridge.ext release flow with auto-changelog
-
 
 ## [0.2.4]
 

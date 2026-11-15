@@ -104,8 +104,8 @@ export const PI_MINION_USAGE_NOTES = [
   "cancel_pi_minion only cancels jobs from this session — another session's id returns not found; if the job id dropped out of context, call list_pi_minions to look it up.",
   "steer_pi_minion sends a message to a still-running job of this session: deliverAs \"steer\" (default) redirects it after the current turn's tool calls, deliverAs \"followUp\" queues the message for when it has no work left. Only running pi and claude jobs accept steering (agy and fm have no channel); a settled or closed job rejects the message — start a follow-up run instead.",
   "maxTurns caps assistant turns per run (1..100000) and is optional: the call's value wins, then the config default (400 in the shipped config), and only with neither is the run unlimited. A capped run ends cancelled with a maxTurns=N reached note; workflow steps can set their own maxTurns, resolved step, then workflow-level, then the config default.",
-  "when a task matches a listed minion's responsibility, pass `minion`: the minion supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win. If the minion's entry in `minions` shows `model: null` or `effort: null`, the file defines none — classify the task against the `modelRouting` table and pass the matching value(s) explicitly.",
-  "The `Model Routing` table (task responsibility → model family + effort and fallback) is always printed in this tool's output as `modelRouting`; classify tasks against it instead of looking for it in your prompt."
+  "when a task matches a listed minion's responsibility, pass `minion`: the minion supplies a curated system prompt plus model/effort defaults, and explicit model/effort still win. If the minion's entry in `minions` shows `model: null` or `effort: null`, the file defines none — classify the task against help_pi_minion's `routingTable` and pass the matching value(s) explicitly. With no configured `routingTable`, pick the values yourself; ask the user when unsure.",
+  "The routing table (task responsibility → model family + effort and fallback) is printed as `routingTable` in help_pi_minion's output when one is configured; when it shows *not configured*, choose model + effort yourself and ask the user when unsure. Classify tasks against it instead of looking for it in your prompt."
 ];
 
 export const RUN_PI_MINION_PARAMETERS = Type.Object({
@@ -115,13 +115,13 @@ export const RUN_PI_MINION_PARAMETERS = Type.Object({
   model: Type.Optional(
     Type.String({
       description:
-        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `modelRouting` table yourself."
+        "A model usable on this machine; call help_pi_minion to list them. pi: `provider/id`; claude, agy, fm: bare id. Required unless the named `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `routingTable` yourself; when `routingTable` shows *not configured*, pick from help_pi_minion's `models` list instead and ask the user when unsure."
     })
   ),
   effort: Type.Optional(
     Type.String({
       description:
-        "Required unless the named `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency). A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `modelRouting` row's First Choice (or Fallback) cell yourself."
+        "Required unless the named `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes (auth, money, data deletion, concurrency). A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `routingTable` row's First Choice (or Fallback) cell yourself; when `routingTable` shows *not configured*, pick the effort for the task's risk level yourself and ask the user when unsure."
     })
   ),
   minion: Type.Optional(
@@ -211,13 +211,13 @@ export const RUN_PI_MINION_WORKFLOW_PARAMETERS = Type.Object({
       model: Type.Optional(
         Type.String({
           description:
-            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `modelRouting` table yourself."
+            "A model usable on this machine; call help_pi_minion to list them. Required unless this step's `minion` supplies one; explicit wins over the minion's default. A minions entry with `model: null` (help_pi_minion) means the minion defines no model — pick the model from the `routingTable` yourself; when `routingTable` shows *not configured*, pick from help_pi_minion's `models` list instead and ask the user when unsure."
         })
       ),
       effort: Type.Optional(
         Type.String({
           description:
-            "Required unless this step's `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes. A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `modelRouting` row's First Choice (or Fallback) cell yourself."
+            "Required unless this step's `minion` supplies one: low for simple mechanical work, medium for ordinary coding, high for debugging/review/risky changes. A minions entry with `effort: null` (help_pi_minion) means the minion defines no effort — pick the effort after the `/` in the matching `routingTable` row's First Choice (or Fallback) cell yourself; when `routingTable` shows *not configured*, pick the effort for the task's risk level yourself and ask the user when unsure."
         })
       ),
       minion: Type.Optional(
@@ -465,6 +465,8 @@ export function buildUsageNotes(
 function textResult<T>(text: string, details: T) {
   return { content: [{ type: "text" as const, text }], details };
 }
+
+const MODEL_ROUTING_UNSET = "**Model Routing:** not configured — pick the model family and effort yourself; ask the user when unsure.";
 
 function formatRoutingTable(table: Record<string, { first: string; fallback: string }>): string {
   const rows = Object.entries(table)
@@ -1042,7 +1044,7 @@ export function registerTools(pi: ExtensionAPI): void {
         minions: await buildHelpMinionList(),
         examples: PI_MINION_EXAMPLES,
         usageNotes: buildUsageNotes(listAdapters(), config),
-        modelRouting: formatRoutingTable(promptConfig.routingTable),
+        routingTable: promptConfig.routingTable ? formatRoutingTable(promptConfig.routingTable) : MODEL_ROUTING_UNSET,
         defaults: {
           timeoutMs: config.timeoutMs,
           maxBudgetUsd: config.maxBudgetUsd,

@@ -33,7 +33,8 @@ import {
   isProviderAllowed,
   loadConfig,
   MAX_MAX_TURNS,
-  MIN_MAX_TURNS
+  MIN_MAX_TURNS,
+  readPromptConfigSync
 } from "./config.js";
 import {
   deriveJobTitle,
@@ -145,15 +146,24 @@ async function applyMinionRequest(
   // Post-merge model/effort must be non-empty, and the error has to name the
   // minion: the generic "effort is required" hint would leave the caller
   // looking in the wrong place.
+  // The routing table is user-supplied and may be unset: the error wording
+  // must match whether a table exists to classify the task against. The
+  // table is only read on the error paths — resolveNoTable() defers the
+  // synchronous config read away from the happy path.
+  const resolveNoTable = () => readPromptConfigSync().routingTable === undefined;
   const model = request.model?.trim() || minion.model;
   if (!model)
     throw new Error(
-      `minion '${name}' defines no model — classify the task against help_pi_minion's \`modelRouting\` table and pass \`model\` explicitly. Confirm the resolved id appears in help_pi_minion's \`models\` list.`
+      resolveNoTable()
+        ? `minion '${name}' defines no model — pick one yourself from help_pi_minion's \`models\` list; ask the user when unsure.`
+        : `minion '${name}' defines no model — classify the task against help_pi_minion's \`routingTable\` and pass \`model\` explicitly. Confirm the resolved id appears in help_pi_minion's \`models\` list.`
     );
   const effort = request.effort?.trim() || minion.effort;
   if (!effort)
     throw new Error(
-      `minion '${name}' defines no effort — pass \`effort\` explicitly, from the \`modelRouting\` table's effort level for this task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
+      resolveNoTable()
+        ? `minion '${name}' defines no effort — pick one yourself (low: mechanical, medium: ordinary coding, high: debugging/review/risky); ask the user when unsure.`
+        : `minion '${name}' defines no effort — pass \`effort\` explicitly, from the \`routingTable\`'s effort level for this task: low for simple, mechanical work; medium for ordinary coding; high for debugging, review, or risky changes.`
     );
   // Only claude narrows: the other adapters never read request.allowedTools,
   // so narrowing for them would claim a restriction the run does not have.

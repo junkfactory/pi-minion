@@ -56,10 +56,11 @@ export type MinionConfig = {
   // in config.ts).
   usageNotes?: string[];
   // Model-selection routing table: task-responsibility label ->
-  // { first, fallback } model family patterns. Merged additively with the
-  // bundled defaults (per-key deep merge) — see readPromptConfigSync in
-  // config.ts. Purely policy: rendered into run_pi_minion's prompt
-  // guidelines, not validated beyond shape.
+  // { first, fallback } model family patterns. User-override only — the
+  // bundled config ships no default (see readPromptConfigSync in
+  // config.ts); unset, the caller picks model/effort itself. Purely
+  // policy: rendered into run_pi_minion's prompt guidelines, not
+  // validated beyond shape.
   routingTable?: Record<string, { first: string; fallback: string }>;
   // Cost gate: model-family globs that require user approval before a
   // minion launches with a matching model, unless the user names the model

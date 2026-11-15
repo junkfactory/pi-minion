@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { setPromptConfigForTest } from "../src/config.js";
 import { buildArgs, createClaudeAdapter } from "../src/adapters/claude.js";
 import { MINION_OPERATIONAL_TAIL, MINION_PROMPT_BASE } from "../src/adapters/util.js";
 import {
@@ -349,17 +350,46 @@ ${BODY}
     );
   });
 
-  it("fails instructively when the minion defines no model and the caller names none", async () => {
+  it("fails instructively when the minion defines no model, caller names none, and no routing table is configured", async () => {
     await withMinions({ "prompt-only.md": MINIMAL }, async (dir) => {
-      await assert.rejects(
-        validateRequest(
-          fakeRequest({ workspace: dir, minion: "prompt-only", model: "" }),
-          dir,
-          config,
-          dir
-        ),
-        /minion 'prompt-only' defines no model — classify the task against help_pi_minion's `modelRouting` table and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
-      );
+      // Seam, not ambient config: the real override file defines a
+      // routingTable here, which would otherwise pick the table wording.
+      setPromptConfigForTest({ routingTable: undefined, costGate: [] });
+      try {
+        await assert.rejects(
+          validateRequest(
+            fakeRequest({ workspace: dir, minion: "prompt-only", model: "" }),
+            dir,
+            config,
+            dir
+          ),
+          /minion 'prompt-only' defines no model — pick one yourself from help_pi_minion's `models` list; ask the user when unsure\./
+        );
+      } finally {
+        setPromptConfigForTest(undefined);
+      }
+    });
+  });
+
+  it("points at the configured routing table when the minion defines no model and the caller names none", async () => {
+    await withMinions({ "prompt-only.md": MINIMAL }, async (dir) => {
+      setPromptConfigForTest({
+        routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+        costGate: []
+      });
+      try {
+        await assert.rejects(
+          validateRequest(
+            fakeRequest({ workspace: dir, minion: "prompt-only", model: "" }),
+            dir,
+            config,
+            dir
+          ),
+          /minion 'prompt-only' defines no model — classify the task against help_pi_minion's `routingTable` and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
+        );
+      } finally {
+        setPromptConfigForTest(undefined);
+      }
     });
   });
 

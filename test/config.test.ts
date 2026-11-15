@@ -17,6 +17,7 @@ import {
   MAX_MAX_TURNS,
   MIN_MAX_TURNS,
   modelMatchesPattern,
+  readPromptConfigSync,
   readShortcutConfigSync,
   resolveShortcut,
   USER_CONFIG_PATH
@@ -563,6 +564,77 @@ describe("readShortcutConfigSync", () => {
     try {
       await writeFile(overridePath, JSON.stringify({ shortcut: "ctrl+j" }), "utf8");
       assert.equal(readShortcutConfigSync(overridePath).shortcut, "ctrl+j");
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+});
+
+describe("readPromptConfigSync", () => {
+  // The bundled pi-minion.json carries no routingTable/costGate defaults, so
+  // both come from the user override file only. Every case passes an explicit
+  // temp override path: the real one on this machine defines a routing table,
+  // so ambient state must never decide these assertions.
+  it("reports routingTable undefined and costGate [] when no override file exists", () => {
+    const promptConfig = readPromptConfigSync(join(tmpdir(), "pi-minion-test-no-prompt-override.json"));
+    assert.equal(promptConfig.routingTable, undefined);
+    assert.deepEqual(promptConfig.costGate, []);
+  });
+
+  it("reads an override's routingTable and costGate wholesale, with no additive merge", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({
+          routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+          costGate: ["gpt-*", "opus"]
+        }),
+        "utf8"
+      );
+      assert.deepEqual(readPromptConfigSync(overridePath), {
+        routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+        costGate: ["gpt-*", "opus"]
+      });
+      // A second override replaces the keys outright — the removed additive
+      // merge would have kept the first file's entries alongside these.
+      await writeFile(
+        overridePath,
+        JSON.stringify({
+          routingTable: { Debug: { first: "t3/high", fallback: "t4/high" } },
+          costGate: []
+        }),
+        "utf8"
+      );
+      assert.deepEqual(readPromptConfigSync(overridePath), {
+        routingTable: { Debug: { first: "t3/high", fallback: "t4/high" } },
+        costGate: []
+      });
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("rejects a malformed override routingTable through the validating reader", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-minion-test-"));
+    const overridePath = join(dir, "pi-minion.json");
+    try {
+      await writeFile(
+        overridePath,
+        JSON.stringify({ routingTable: { Explore: { first: 7 } }, costGate: "gpt-*" }),
+        "utf8"
+      );
+      await assert.rejects(
+        loadConfig(overridePath),
+        /Invalid pi-minion configuration \(after merging .* over .*\)/
+      );
+      // readPromptConfigSync is deliberately policy-only: the shape check
+      // lives in loadConfig, so this reader hands the raw values through.
+      assert.deepEqual(readPromptConfigSync(overridePath), {
+        routingTable: { Explore: { first: 7 } },
+        costGate: "gpt-*"
+      });
     } finally {
       await rm(dir, { recursive: true });
     }

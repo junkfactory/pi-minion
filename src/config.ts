@@ -230,18 +230,20 @@ export function readShortcutConfigSync(
   return applyConfigOverride(base, overrideText, overridePath);
 }
 
-// Synchronous read of the prompt-policy fields (routingTable + costGate),
-// mirroring readShortcutConfigSync. Reads the bundled pi-minion.json (which
-// already carries the defaults) plus the user override, applies the normal
-// wholesale applyConfigOverride merge, then does an additive per-key deep
-// merge for routingTable specifically — a user entry replaces or adds a
-// responsibility without dropping the bundled defaults, and a partial
-// { first, fallback } deep-merges over its default. costGate stays wholesale
-// (same as every other top-level key).
+let testPromptConfig: ReturnType<typeof readPromptConfigSync> | undefined;
+export function setPromptConfigForTest(v: typeof testPromptConfig) { testPromptConfig = v; }
+
+// Synchronously reads the prompt-policy fields (routingTable + costGate),
+// mirroring readShortcutConfigSync. The bundled pi-minion.json carries no
+// defaults for these keys, so both come from the user override file only:
+// unset routingTable → undefined, unset costGate → [].
 export function readPromptConfigSync(overridePath: string = USER_CONFIG_PATH): {
-  routingTable: Record<string, { first: string; fallback: string }>;
+  routingTable?: Record<string, { first: string; fallback: string }>;
   costGate: string[];
 } {
+  // While the seam is set the overridePath argument is ignored: the seam
+  // short-circuits before any file read.
+  if (testPromptConfig !== undefined) return testPromptConfig;
   let base: {
     routingTable?: Record<string, { first: string; fallback: string }>;
     costGate?: string[];
@@ -253,17 +255,5 @@ export function readPromptConfigSync(overridePath: string = USER_CONFIG_PATH): {
   }
   const overrideText = existsSync(overridePath) ? readFileSync(overridePath, "utf8") : undefined;
   const merged = applyConfigOverride(base, overrideText, overridePath);
-
-  // Additive merge for routingTable
-  const baseTable = base.routingTable ?? {};
-  const overrideTable = merged.routingTable ?? {};
-  const routingTable = { ...baseTable };
-  for (const [k, v] of Object.entries(overrideTable)) {
-    routingTable[k] = { ...(baseTable[k] ?? {}), ...v };
-  }
-
-  return {
-    routingTable,
-    costGate: merged.costGate ?? base.costGate ?? []
-  };
+  return { routingTable: merged.routingTable, costGate: merged.costGate ?? [] };
 }

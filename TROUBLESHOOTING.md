@@ -179,8 +179,10 @@ TUI session (headless run or captured stderr), so check there first.
 ... over ...)`.**
 `loadConfig()` throws this once the merged config has a wrong-typed
 field (`models`, `providers`, `allowedTools`, `adapterArgs`,
-`usageNotes`, `routingTable`, `costGate`, or `maxTurns`). Two ways to
-hit it:
+`usageNotes`, `routingTable`, `costGate`, or `maxTurns`). `routingTable` and
+`costGate` ship no bundled default — they are defined only by your override
+file: an unset `routingTable` means the caller decides the model and effort
+itself, and an unset `costGate` means no cost gate is applied. Two ways to hit it:
 
 - The override file at `~/.pi/agent/extensions/pi-minion.json` is valid
   JSON but sets one of those fields to something falsy or

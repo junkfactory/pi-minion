@@ -12,6 +12,7 @@ import { createAgyAdapter, parseAgyModelsList, setAgyModelsForTesting } from "..
 import { createPiAdapter, setModelRegistry } from "../src/adapters/pi.js";
 import { createFmAdapter, FM_USAGE_NOTES } from "../src/adapters/fm.js";
 import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { setPromptConfigForTest } from "../src/config.js";
 import { createFakeAdapter, fakeConfig, fakeModelRegistry } from "./fakes.js";
 import {
   buildHelpMinionList,
@@ -274,7 +275,7 @@ describe("RUN_PI_MINION_PARAMETERS", () => {
     assert.match(minion, /help_pi_minion's `minions` list/);
     assert.match(minion, /unknown name fails with the list of valid names/);
     assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /Required unless the named `minion` supplies one/);
-    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /modelRouting/);
+    assert.match(descriptionOf(RUN_PI_MINION_PARAMETERS, "effort"), /routingTable/);
   });
 
   it("accepts a timeoutMs and rejects a non-number", () => {
@@ -534,7 +535,7 @@ describe("minion param", () => {
     const note = PI_MINION_USAGE_NOTES.find((line) => line.includes("pass `minion`"));
     assert.ok(note, "PI_MINION_USAGE_NOTES carries the minion usage note");
     assert.match(note!, /shows .model: null. or .effort: null./);
-    assert.match(note!, /classify the task against the .modelRouting. table/);
+    assert.match(note!, /classify the task against help_pi_minion's .routingTable. and pass/);
   });
 });
 
@@ -582,13 +583,34 @@ describe("buildHelpMinionList", () => {
 
 describe("registerTools prompt footprint", () => {
   // Minimal fake ExtensionAPI: registerTools() only calls pi.registerTool()
-  // at registration time. Captured definitions are asserted below.
+  // at registration time, where it snapshots readPromptConfigSync(). The
+  // snapshot happens before any test runs, so each footprint is registered
+  // under a forced seam state (reset right after, try/finally so a throw
+  // cannot leak the fixture) and nothing depends on the machine's real
+  // override file. With costGate unset the .filter(Boolean) drops the
+  // **Cost Gate:** bullet, leaving one fewer guideline per delegating tool.
   const registered: ToolDefinition[] = [];
-  registerTools({
-    registerTool: (definition: ToolDefinition) => {
-      registered.push(definition);
-    }
-  } as unknown as ExtensionAPI);
+  const registeredUnset: ToolDefinition[] = [];
+  setPromptConfigForTest({ routingTable: undefined, costGate: ["kimi-*"] });
+  try {
+    registerTools({
+      registerTool: (definition: ToolDefinition) => {
+        registered.push(definition);
+      }
+    } as unknown as ExtensionAPI);
+  } finally {
+    setPromptConfigForTest(undefined);
+  }
+  setPromptConfigForTest({ routingTable: undefined, costGate: [] });
+  try {
+    registerTools({
+      registerTool: (definition: ToolDefinition) => {
+        registeredUnset.push(definition);
+      }
+    } as unknown as ExtensionAPI);
+  } finally {
+    setPromptConfigForTest(undefined);
+  }
 
   const byName = new Map(registered.map((def) => [def.name, def]));
   const exposure = (name: string): string => byName.get(name)?.exposure ?? "direct";
@@ -675,6 +697,34 @@ describe("registerTools prompt footprint", () => {
     }
   });
 
+  it("drops the cost-gate bullet when costGate is unset", () => {
+    const runUnset = registeredUnset.find((def) => def.name === "run_pi_minion");
+    const run = byName.get("run_pi_minion");
+    assert.ok(runUnset && run, "both run_pi_minion registrations exist");
+    const unsetGuidelines = runUnset.promptGuidelines ?? [];
+    const gatedGuidelines = (run.promptGuidelines ?? []).filter(
+      (line) => !line.startsWith("**Cost Gate:**")
+    );
+    assert.equal(unsetGuidelines.length, 11, "run_pi_minion promptGuidelines count without cost gate");
+    assert.ok(
+      !unsetGuidelines.some((line) => line.startsWith("**Cost Gate:**")),
+      "no **Cost Gate:** bullet when costGate is unset"
+    );
+    assert.deepEqual(
+      unsetGuidelines,
+      gatedGuidelines,
+      "the unset bullets equal the gate-present set minus the cost-gate bullet"
+    );
+    const wfUnset = registeredUnset.find((def) => def.name === "run_pi_minion_workflow");
+    assert.ok(wfUnset, "run_pi_minion_workflow is registered");
+    const wfGuidelines = wfUnset.promptGuidelines ?? [];
+    assert.equal(wfGuidelines.length, 10, "run_pi_minion_workflow promptGuidelines count without cost gate");
+    assert.ok(
+      !wfGuidelines.some((line) => line.startsWith("**Cost Gate:**")),
+      "no **Cost Gate:** bullet on the workflow tool when costGate is unset"
+    );
+  });
+
   it("steer_pi_minion validates args and reports a non-running job instead of throwing", async () => {
     const steer = byName.get("steer_pi_minion");
     assert.ok(steer, "steer_pi_minion is registered");
@@ -701,6 +751,9 @@ describe("registerTools prompt footprint", () => {
     // no machine-CLI discovery (`which`/`fm models`) mid-test — same seam
     // job-runner tests use (see test/job-runner.test.ts).
     setAdaptersForTest([createFakeAdapter(fakeConfig())]);
+    // Pin the prompt-policy fields too: this machine's real override file
+    // defines a routingTable, so ambient state would decide the payload.
+    setPromptConfigForTest({ routingTable: undefined, costGate: [] });
     try {
       const result = await help.execute(
         "call-help",
@@ -710,7 +763,7 @@ describe("registerTools prompt footprint", () => {
         {} as ExtensionToolContext
       );
       const payload = result.details as {
-        modelRouting?: string;
+        routingTable?: string;
         minions?: Array<{ name: string; description: string; model: string | null; effort: string | null }>;
         usageNotes?: string[];
       };
@@ -731,12 +784,44 @@ describe("registerTools prompt footprint", () => {
         payload.usageNotes?.some((note) => note.includes("pass `minion`")),
         "payload.usageNotes carries the minion note"
       );
-      assert.equal(typeof payload.modelRouting, "string", "payload.modelRouting must be a string");
+      assert.equal(typeof payload.routingTable, "string", "payload.routingTable must be a string");
       assert.ok(
-        payload.modelRouting?.includes("**Model Routing:**"),
-        "payload.modelRouting must contain the **Model Routing:** table"
+        payload.routingTable?.includes("**Model Routing:**"),
+        "payload.routingTable must contain the **Model Routing:** table"
+      );
+      assert.match(
+        payload.routingTable ?? "",
+        /not configured/,
+        "with no override routingTable the payload says nothing is configured"
       );
     } finally {
+      setPromptConfigForTest(undefined);
+      setAdaptersForTest();
+    }
+  });
+
+  it("help payload renders a configured routing table as rows", async () => {
+    const help = byName.get("help_pi_minion");
+    assert.ok(help, "help_pi_minion is not registered");
+    setAdaptersForTest([createFakeAdapter(fakeConfig())]);
+    setPromptConfigForTest({
+      routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+      costGate: []
+    });
+    try {
+      const result = await help.execute(
+        "call-help",
+        {},
+        undefined,
+        undefined,
+        {} as ExtensionToolContext
+      );
+      const routingTable = (result.details as { routingTable?: string }).routingTable ?? "";
+      assert.match(routingTable, /\| Explore \|/, "the configured table renders as a row");
+      assert.match(routingTable, /t1\/low/);
+      assert.ok(!routingTable.includes("not configured"), "a configured table replaces the fallback text");
+    } finally {
+      setPromptConfigForTest(undefined);
       setAdaptersForTest();
     }
   });

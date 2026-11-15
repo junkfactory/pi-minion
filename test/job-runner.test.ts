@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setAdaptersForTest } from "../src/adapters/registry.js";
+import { setPromptConfigForTest } from "../src/config.js";
 import { createClaudeAdapter } from "../src/adapters/claude.js";
 import { MINION_OPERATIONAL_TAIL, MINION_PROMPT_BASE } from "../src/adapters/util.js";
 import { validateRequest } from "../src/job-runner.js";
@@ -306,36 +307,98 @@ describe("validateRequest minion requests", () => {
     );
   });
 
-  it("names the minion when the merged model is empty", async () => {
+  it("names the minion when the merged model is empty and no routing table is configured", async () => {
     await withMinionDir(
       { "reviewer.md": minionFile("description: Prompt-only minion") },
       async ({ workspace, minions }) => {
-        await assert.rejects(
-          validateRequest(
-            fakeRequest({ workspace, minion: "reviewer", model: "" }),
-            workspace,
-            fakeConfig(),
-            minions
-          ),
-          /minion 'reviewer' defines no model — classify the task against help_pi_minion's `modelRouting` table and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
-        );
+        // Seam, not ambient config: this machine's override file defines a
+        // routingTable, which would otherwise select the table wording.
+        setPromptConfigForTest({ routingTable: undefined, costGate: [] });
+        try {
+          await assert.rejects(
+            validateRequest(
+              fakeRequest({ workspace, minion: "reviewer", model: "" }),
+              workspace,
+              fakeConfig(),
+              minions
+            ),
+            /minion 'reviewer' defines no model — pick one yourself from help_pi_minion's `models` list; ask the user when unsure\./
+          );
+        } finally {
+          setPromptConfigForTest(undefined);
+        }
       }
     );
   });
 
-  it("names the minion when the merged effort is empty", async () => {
+  it("points at the routing table when the merged model is empty and a table is configured", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Prompt-only minion") },
+      async ({ workspace, minions }) => {
+        setPromptConfigForTest({
+          routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+          costGate: []
+        });
+        try {
+          await assert.rejects(
+            validateRequest(
+              fakeRequest({ workspace, minion: "reviewer", model: "" }),
+              workspace,
+              fakeConfig(),
+              minions
+            ),
+            /minion 'reviewer' defines no model — classify the task against help_pi_minion's `routingTable` and pass `model` explicitly\. Confirm the resolved id appears in help_pi_minion's `models` list\./
+          );
+        } finally {
+          setPromptConfigForTest(undefined);
+        }
+      }
+    );
+  });
+
+  it("names the minion when the merged effort is empty and no routing table is configured", async () => {
     await withMinionDir(
       { "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet") },
       async ({ workspace, minions }) => {
-        await assert.rejects(
-          validateRequest(
-            fakeRequest({ workspace, minion: "reviewer", effort: "" }),
-            workspace,
-            fakeConfig(),
-            minions
-          ),
-          /minion 'reviewer' defines no effort — pass `effort` explicitly, from the `modelRouting` table's effort level for this task/
-        );
+        setPromptConfigForTest({ routingTable: undefined, costGate: [] });
+        try {
+          await assert.rejects(
+            validateRequest(
+              fakeRequest({ workspace, minion: "reviewer", effort: "" }),
+              workspace,
+              fakeConfig(),
+              minions
+            ),
+            /minion 'reviewer' defines no effort — pick one yourself \(low: mechanical, medium: ordinary coding, high: debugging\/review\/risky\); ask the user when unsure\./
+          );
+        } finally {
+          setPromptConfigForTest(undefined);
+        }
+      }
+    );
+  });
+
+  it("points at the routing table when the merged effort is empty and a table is configured", async () => {
+    await withMinionDir(
+      { "reviewer.md": minionFile("description: Reviews changes\nmodel: sonnet") },
+      async ({ workspace, minions }) => {
+        setPromptConfigForTest({
+          routingTable: { Explore: { first: "t1/low", fallback: "t2/low" } },
+          costGate: []
+        });
+        try {
+          await assert.rejects(
+            validateRequest(
+              fakeRequest({ workspace, minion: "reviewer", effort: "" }),
+              workspace,
+              fakeConfig(),
+              minions
+            ),
+            /minion 'reviewer' defines no effort — pass `effort` explicitly, from the `routingTable`'s effort level for this task/
+          );
+        } finally {
+          setPromptConfigForTest(undefined);
+        }
       }
     );
   });
